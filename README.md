@@ -2,33 +2,60 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-**Tiered model orchestration for Claude Code.** Keep your most expensive model (Fable, Opus — whatever tops the lineup) in the orchestrator's chair — decomposing, spec-writing, and reviewing — while cheaper models (Sonnet/Haiku tiers) do the implementation. Objective gates (typecheck/tests) filter out everything a machine can catch before the expensive model spends a single token reviewing.
+**Tiered model orchestration for Claude Code.** Keep your most expensive model (Fable, Opus — whatever tops the lineup) on judgment work only — decomposing, spec-writing, reviewing — while cheaper models (Sonnet/Haiku tiers) do the implementation. Objective gates (typecheck/tests) filter out everything a machine can catch before an expensive token is spent reviewing.
 
-Version-agnostic by design: the skill routes by **model alias/tier** (strongest / mid / cheapest), never by hardcoded model IDs, so it keeps working across model generations.
+Measured effect on a real 1,100-line task: **−34% strongest-tier quota in lite mode, −88% in max mode**, identical output quality. Full data in [BENCHMARKS.md](BENCHMARKS.md).
 
-## Why
+## How it works
 
-When you chat with Claude Code, the model you pick powers the *main loop* — but every subagent it spawns can run on a different, cheaper model. The quality gap between tiers lives almost entirely in **judgment** (what to build, how to structure it, is this diff right), not in typing out well-specified code. So:
+Every Claude Code session has a **main loop** — the model you pick with `/model`. The main loop pays for everything it touches: every tool result, every file read, every turn of bookkeeping. That "main-loop tax" is most of what a session costs, and a skill cannot change which model runs it — only you can, via `/model`. What a skill *can* do is decide which model runs each **subagent** (the Agent tool takes a per-spawn `model` parameter, using version-agnostic aliases).
 
-- **Orchestrator** (your main-loop model) writes task packets and reviews diffs.
-- **Implementer** (Sonnet tier) writes the code, and must pass your typecheck/test gate before returning.
-- **Mechanic** (Haiku tier) does renames, batch edits, config changes — cheaper again.
-- **Scout** (Haiku tier) reads the codebase so the orchestrator's context stays clean.
+This skill exploits both facts:
+
+```
+ lite mode  (/model = Fable)              max mode  (/model = Opus 4.8)
+ ┌───────────────────────────┐            ┌───────────────────────────┐
+ │ FABLE · main loop         │            │ OPUS · main loop          │
+ │ classify → spec → review  │            │ classify → spec → review  │
+ └─────┬─────────────────────┘            └─────┬───────────────┬─────┘
+       │ task packets                           │ task packets  │ 2 briefs only
+       ▼                                        ▼               ▼
+ ┌──────────┐  ┌──────────┐              ┌──────────┐   ┌──────────────┐
+ │ SONNET   │  │ HAIKU    │              │ SONNET   │   │ FABLE        │
+ │implement │  │ mechanic │              │implement │   │ consultant:  │
+ └────┬─────┘  └────┬─────┘              └────┬─────┘   │ plan verdict │
+      │  gate: tsc+tests green ──┐            │  gate   │ final review │
+      ▼                          ▼            ▼         └──────────────┘
+     diff-only review by the main loop       diff review → consultant approves
+```
+
+- **Task packets**, never conversation history: workers get GOAL / CONTEXT (≤5 lines) / ALLOWED FILES / SPEC / GATE / DO-NOT-fence.
+- **Gates before review**: the worker runs `tsc && tests` in *its own* context and self-fixes until green (max 3 attempts). Ungated code is never reviewed.
+- **Diff-only review** for design and intent — the gate owns syntax, types, and test truth.
+- **In max mode**, the strongest model is a stateless consultant: the mid-tier main loop *drafts* the plan (drafting is long-form and belongs on the cheap tier), Fable only *rules* on it, then approves or revises the final diff. Two brief-in/verdict-out calls, zero session context carried (measured: 0 cache-read tokens).
 
 ## Two modes — pick by picking your session model
 
-No config file: the skill detects which model powers your main loop and adapts. Mode names describe **saving intensity** (lite saves less, max saves most) — not model strength.
+No config file: the skill detects your main-loop model and adapts. Mode names describe **saving intensity** (lite saves less, max saves most) — not model strength.
 
 | | **lite** | **max** |
 |---|---|---|
 | Main loop (`/model`) | strongest tier (Fable) | mid tier (**Opus recommended**) |
 | Code written by | Sonnet / Haiku workers | Sonnet / Haiku workers |
-| Strongest tier's job | steers every step | **Consultant subagent** at 2 checkpoints only: plan verdict + pre-merge review |
-| Strongest-tier savings | **−42% (measured)** | **−89% measured** with an Opus main loop (−61% with Sonnet — see below) |
-| Total dollar cost | lowest of all orchestrated configs | **higher than baseline** (+86%) — this mode trades dollars for strongest-tier quota |
-| Use when | you want top-tier judgment on every turn | strongest-tier quota is exhausted and that's your binding constraint |
+| Strongest tier's job | steers every step | consultant at 2 checkpoints only |
+| Strongest-tier quota | **−34% (measured)** | **−88% (measured, Opus loop)** |
+| Total dollar cost | lowest orchestrated config | **+86% vs baseline** — trades dollars for quota |
+| Use when | top-tier judgment on every turn | strongest-tier quota is your binding constraint |
 
-Why max mode works: the main loop pays for every tool result and every turn of bookkeeping at main-loop rates — that "main-loop tax" dwarfed the actual judgment content in our benchmarks (17.9k spent vs ~5k of real decisions). Max mode moves the tax down a tier and buys strongest-tier judgment only at the two moments it actually differs. Say "no fable" to skip the consultant entirely when the strongest tier's quota is fully drained.
+## Benchmarks (the elevator version)
+
+Same 1,100-line greenfield task, four configurations, all gates green, quality assertions identical:
+
+- **lite**: strongest-tier quota **−34%**, lowest total cost of any orchestrated config, most tests produced
+- **max (Opus loop)**: strongest-tier quota **−88%**, fastest (116s vs 335s baseline), but total cost +86%
+- **Small tasks (< ~300 lines): negative returns (+34~66% strongest-tier)** — the skill detects this and steps aside
+
+Full four-way tables, the itemized quota bill, per-model pricing, methodology, and honest findings (including why a Sonnet main loop loses on both metrics): **[BENCHMARKS.md](BENCHMARKS.md)**.
 
 ## Install
 
@@ -49,85 +76,11 @@ Three ways to start it, in any mode:
 
 1. **Explicit** — `/fable-token-saver refactor the payments module`
 2. **Natural language** — "delegate this to cheaper models and review the result", "token-saver this task", "省token模式做这个", "用 token saver 走一下"
-3. **Proactive** — on sizable well-specified tasks (roughly 300+ lines or 6+ files) the skill triggers itself; below that delegation floor it deliberately stays out of the way (see Benchmarks — this matters).
-
-## Core mechanics
-
-1. **Classify** — mechanical → cheapest tier; specifiable → mid tier; design-heavy → the orchestrator does it personally. Small-volume tasks are never delegated at all.
-2. **Task packets** — workers get GOAL / CONTEXT (≤5 lines) / ALLOWED FILES / SPEC / GATE / DO-NOT-fence. Never the conversation transcript.
-3. **Objective gates** — the worker runs `tsc && test` in *its own* context and self-fixes until green (max 3 attempts) before returning. The orchestrator never reviews ungated code.
-4. **Diff-only review** — the orchestrator reviews the diff for design and intent, not syntax or types. The gate owns those.
-5. **Delta retries** — a revise verdict goes back to the *same* worker with only the delta, not a fresh worker with a full packet.
-
-## Benchmarks
-
-All numbers from real headless `claude -p` runs (main loop = Claude Fable 5, workers = Sonnet 5 / Haiku 4.5), measured via the CLI's per-model usage JSON. Every run passed both gates (`tsc --noEmit` + `vitest`) and all quality assertions — **with and without the skill, output quality was identical**. The differences are cost and time.
-
-### Small tasks: the skill makes things WORSE (that's the honest finding)
-
-Three small tasks (≤ ~150 changed lines, ≤ 5 files):
-
-| Task | Fable output tokens (with skill) | Fable output tokens (without) | Δ Fable | Total cost with / without | Time with / without |
-|---|---|---|---|---|---|
-| Multi-file feature (hook + tests) | 4,277 | 2,757 | **+55%** | $1.25 / $0.78 | 121s / 53s |
-| Repo-wide mechanical rename | 1,865 | 1,124 | **+66%** | $0.82 / $0.63 | 83s / 36s |
-| API error-envelope redesign + apply | 6,415 | 4,798 | **+34%** | $1.85 / $1.08 | 235s / 84s |
-
-Below the break-even point, writing the task packet and reviewing the diff costs more expensive-model tokens than just typing the change. Quality assertions: 30/30 passed in both conditions — no quality gain to offset the cost.
-
-**The delegation floor (now baked into the skill):** delegate only when ≥ ~300 new/changed lines, or ≥ ~6 files, or repetitive edits across many call sites. The skill refuses to orchestrate below this line and does the work directly in the main loop.
-
-### Large tasks: the full four-way comparison
-
-One large task — a greenfield 8-module shopping-cart subsystem (~1,100 lines of code + tests written from scratch) — run four ways. All four passed every gate and every quality assertion (8/8 modules, all tests green):
-
-| Configuration | Fable output | Fable cost | Total cost | Time | Tests |
-|---|---|---|---|---|---|
-| Baseline — Fable does everything | 30,993 | $3.05 | $3.05 | 335s | 81 |
-| **lite** — Fable orchestrates, Sonnet implements | 17,899 (**−42%**) | $2.03 | **$2.91 (lowest)** | 465s | **91** |
-| **max** — Opus 4.8 main loop, Fable consultant | **3,278 (−89%)** | **$0.38** | $5.66 | **116s** | 83 |
-| max variant — Sonnet 5 main loop | 12,152 (−61%) | $1.41 | $5.87 (highest) | 162s | 66 |
-
-### The Fable quota bill, itemized
-
-"Fable savings" above quotes output tokens, but subscription rate limits meter **weighted usage across every dimension** — input, output, cache writes, cache reads. Here is everything billed to Fable in each configuration, same task:
-
-| Configuration | Input | Output | Cache write | Cache read | Fable-attributed cost | Quota burn vs baseline |
-|---|---|---|---|---|---|---|
-| Baseline | 11,861 | 30,993 | 49,273 | 398,157 | $3.05 | — |
-| lite | 11,595 | 17,899 | 40,451 | 205,528 | $2.03 | **−34%** |
-| max (Opus loop) | 11,046 | 3,278 | 8,282 | **0** | $0.38 | **−88%** |
-| max (Sonnet loop) | 22,614 | 12,152 | 41,098 | 65,919 | $1.41 | −54% |
-
-The exact quota-weighting formula isn't public, but per-token prices weight the same dimensions the same way compute does — so the **Fable-attributed cost column is the best available proxy for quota burn**, and it's what the "savings" percentages throughout this README are anchored to.
-
-Note the zero in max-opus's cache-read column: the consultant never carries session context — two stateless brief-in/verdict-out calls, exactly as the protocol prescribes. That, not the output-token cut alone, is where the 9× reduction comes from: in baseline and lite, the strongest model re-reads hundreds of thousands of cached context tokens every turn just by *being* the main loop.
-
-Three honest findings:
-
-1. **Max mode delivers on its promise — for quota only.** With an Opus main loop, Fable spent just 3,278 tokens (two clean consultant checkpoints) — a 9× reduction. But total dollars went **up** 86%: the main-loop tax didn't disappear, it moved to Opus and grew (Opus emitted 60k output tokens in the same role where Fable needed 17.9k).
-2. **The main-loop model's discipline matters more than its price.** Sonnet 5 costs 60% of Opus per token but leaned on the Fable consultant 3.7× harder and churned 4.6M cache-read tokens — losing on both metrics. Max mode's recommended main loop is **Opus-class**.
-3. **No orchestrated configuration beat the baseline on total dollars at this task size.** lite came closest (−5%). If dollars are your only metric, orchestration pays off only on tasks substantially larger than ~1,100 lines — or not at all. Know which wallet you're optimizing before turning this on.
-
-**Read the two tables together and the story is simple:** below the delegation floor the skill taxes you; above it, it cuts your strongest-tier consumption by roughly a third to a half, at the price of slower wall-clock.
-
-### What are you actually saving? (read this if −5% looks underwhelming)
-
-There are two different wallets, and the skill serves one of them much better:
-
-- **Pay-per-token API users** — total dollars is your metric, and at the crossover scale the saving is marginal (−5%): the implementation work still has to be done by *someone*, and Sonnet's share isn't free. The dollar gap widens with task size, because the orchestrator's packet+review overhead is roughly fixed while the delegated volume grows. If this is you, only reach for the skill on genuinely large tasks.
-- **Subscription users (Claude Max and similar)** — your real constraint is the strongest model's **rate-limit quota**, not dollars. Cheaper tiers burn quota far slower, and the quota window resets regardless of what you spent it on. **−42% strongest-tier consumption means roughly 1.7× more orchestrated work per quota window.** This is the skill's primary audience: it is a quota-arbitrage tool first, a cost tool second.
-
-### Methodology
-
-- Each condition runs as an independent headless `claude -p` session in a fresh copy of the same fixture repo (real `pnpm` project, git-initialized).
-- With-skill prompt invokes the skill; baseline prompt forbids skills. Same task text otherwise.
-- Costs/tokens come from the CLI's `--output-format json` per-model usage breakdown — no estimation.
-- Quality graded by identical objective assertions (gates re-run, greps, diff-scope checks) in both conditions.
+3. **Proactive** — on sizable well-specified tasks (roughly 300+ lines or 6+ files) the skill triggers itself; below that delegation floor it deliberately stays out of the way.
 
 ## When not to use it
 
-One-liners, pure analysis, design-heavy cores, and anything under the delegation floor above. The skill says so itself and steps aside — see the numbers for why.
+One-liners, pure analysis, design-heavy cores, and anything under the delegation floor. The benchmarks show why: below ~300 lines, packet-writing plus review costs more than just typing the change. The skill says so itself and steps aside.
 
 ## License
 
