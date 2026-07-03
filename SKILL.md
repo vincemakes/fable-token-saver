@@ -35,7 +35,7 @@ The two misdetections are not symmetric. Wrongly picking **max** costs one waste
 Two mandatory guardrails:
 
 - **Announce the verdict** in your first line of orchestration — "Main loop detected as `<model>` → `<mode>` mode" — so a wrong guess is visible and correctable while it is still cheap.
-- **Contradiction check**: if the user's own words presume a consultant above you ("have Fable review it", "走 fable") while you have detected yourself as that tier, treat it as a detection failure, not a user error — confirm the session model before proceeding in lite.
+- **Contradiction check**: if the user's own words presume a consultant above you ("have Fable review it", "走 fable") while you have detected yourself as that tier, treat it as a detection failure, not a user error — confirm the session model before proceeding in lite. Explicit invocation of this skill is *not* by itself such a contradiction — lite is a legitimate strongest-tier mode — but it does raise the stakes of a silent misdetection, and defaulting to max when you truly are the strongest tier fails silently too (you would be consulting yourself, which produces no error). So under explicit invocation, resolve any remaining model uncertainty by **asking**, not by defaulting in either direction.
 
 ## The economics
 
