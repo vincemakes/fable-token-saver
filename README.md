@@ -17,7 +17,7 @@ When you chat with Claude Code, the model you pick powers the *main loop* — bu
 
 ## Two modes — pick by picking your session model
 
-No config file: the skill detects which model powers your main loop and adapts.
+No config file: the skill detects which model powers your main loop and adapts. Mode names describe **saving intensity** (lite saves less, max saves most) — not model strength.
 
 | | **lite** | **max** |
 |---|---|---|

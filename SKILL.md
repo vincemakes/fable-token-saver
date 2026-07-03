@@ -7,7 +7,7 @@ description: Tiered model orchestration for Claude Code. The main-loop model (wh
 
 ## Modes: detect, don't configure
 
-The skill has two modes, selected by which model powers the main loop — the user picks the mode by picking the session model (`/model`), and you adapt:
+The skill has two modes, selected by which model powers the main loop — the user picks the mode by picking the session model (`/model`), and you adapt. Mode names describe **saving intensity** (lite = saves less, max = saves most), not model strength:
 
 **lite mode — the strongest tier IS the main loop (e.g. Fable).** You are both orchestrator and final authority. Follow the full workflow below. Measured effect: −42% strongest-tier consumption on large tasks.
 
@@ -16,7 +16,9 @@ The skill has two modes, selected by which model powers the main loop — the us
 1. **Plan checkpoint** (before dispatching any packet): send a ≤15-line brief — goal, constraints, proposed decomposition, interface sketches. The consultant returns design verdicts and acceptance criteria; fold them into your packets.
 2. **Pre-merge checkpoint** (after your own diff review): send the diff stat, your verdict, and open concerns. The consultant returns approve/revise with pointed deltas.
 
-The consultant never implements and never sees the raw conversation — briefs only. Skip it only when the user explicitly opts out ("no fable", strongest-tier quota exhausted); then you are the final authority. Why this shape: the main loop pays strongest-tier rates for every tool result and every turn of bookkeeping — moving the main loop down a tier and buying strongest-tier judgment only at the two moments it actually differs (~3-5k tokens) cuts strongest-tier burn by an estimated 80-85%.
+Division of labor at the plan checkpoint: **you draft** the decomposition and interface sketches (drafting is long-form and belongs on the cheap tier), the consultant only **rules** on them — keep/change verdicts, acceptance criteria, risks. Never ask the strongest tier to author what a mid tier can draft and it can judge.
+
+The consultant never implements and never sees the raw conversation — briefs only. If the strongest tier isn't available on this account, use the best tier above your own as consultant, or proceed as final authority if none exists. Skip the consultant only when the user explicitly opts out ("no fable", strongest-tier quota exhausted); then you are the final authority. Why this shape: the main loop pays strongest-tier rates for every tool result and every turn of bookkeeping — moving the main loop down a tier and buying strongest-tier judgment only at the two moments it actually differs (~3-5k tokens) cuts strongest-tier burn by an estimated 80-85%.
 
 ## The economics
 
