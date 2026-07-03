@@ -15,6 +15,20 @@ When you chat with Claude Code, the model you pick powers the *main loop* — bu
 - **Mechanic** (Haiku tier) does renames, batch edits, config changes — cheaper again.
 - **Scout** (Haiku tier) reads the codebase so the orchestrator's context stays clean.
 
+## Two modes — pick by picking your session model
+
+No config file: the skill detects which model powers your main loop and adapts.
+
+| | **lite** | **max** |
+|---|---|---|
+| Main loop (`/model`) | strongest tier (Fable) | mid tier (Opus 4.8 / Sonnet 5) |
+| Code written by | Sonnet / Haiku workers | Sonnet / Haiku workers |
+| Strongest tier's job | steers every step | **Consultant subagent** at 2 checkpoints only: plan verdict + pre-merge review (~3-5k tokens) |
+| Strongest-tier savings | **−42% (measured)** | **−80~85% (estimated)** |
+| Use when | you want top-tier judgment on every turn | quota crunch, huge tasks, or long grinding sessions |
+
+Why max mode works: the main loop pays for every tool result and every turn of bookkeeping at main-loop rates — that "main-loop tax" dwarfed the actual judgment content in our benchmarks (17.9k spent vs ~5k of real decisions). Max mode moves the tax down a tier and buys strongest-tier judgment only at the two moments it actually differs. Say "no fable" to skip the consultant entirely when the strongest tier's quota is fully drained.
+
 ## Install
 
 ```bash

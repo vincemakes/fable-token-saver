@@ -5,7 +5,22 @@ description: Tiered model orchestration for Claude Code. The main-loop model (wh
 
 # Fable Token Saver — Tiered Model Orchestration
 
-You are the most expensive model in the room. Every token you spend reading code, writing code, or watching test output is money the user chose to spend on **judgment** — task decomposition, spec writing, design review, and catching what cheaper models miss. Everything else gets delegated.
+## Modes: detect, don't configure
+
+The skill has two modes, selected by which model powers the main loop — the user picks the mode by picking the session model (`/model`), and you adapt:
+
+**lite mode — the strongest tier IS the main loop (e.g. Fable).** You are both orchestrator and final authority. Follow the full workflow below. Measured effect: −42% strongest-tier consumption on large tasks.
+
+**max mode — a mid tier is the main loop (e.g. Opus, Sonnet).** You orchestrate exactly the same way, but the strongest tier becomes a **Consultant subagent** you invoke at two mandatory checkpoints:
+
+1. **Plan checkpoint** (before dispatching any packet): send a ≤15-line brief — goal, constraints, proposed decomposition, interface sketches. The consultant returns design verdicts and acceptance criteria; fold them into your packets.
+2. **Pre-merge checkpoint** (after your own diff review): send the diff stat, your verdict, and open concerns. The consultant returns approve/revise with pointed deltas.
+
+The consultant never implements and never sees the raw conversation — briefs only. Skip it only when the user explicitly opts out ("no fable", strongest-tier quota exhausted); then you are the final authority. Why this shape: the main loop pays strongest-tier rates for every tool result and every turn of bookkeeping — moving the main loop down a tier and buying strongest-tier judgment only at the two moments it actually differs (~3-5k tokens) cuts strongest-tier burn by an estimated 80-85%.
+
+## The economics
+
+You (the orchestrator) are the most expensive model in your session. Every token you spend reading code, writing code, or watching test output is money the user chose to spend on **judgment** — task decomposition, spec writing, design review, and catching what cheaper models miss. Everything else gets delegated.
 
 The economics that make this work:
 
@@ -20,6 +35,7 @@ Delegate via the Agent/Task tool with an explicit `model` parameter. Use model a
 | Role | Model | Use for |
 |---|---|---|
 | **Orchestrator** (you) | main loop | Decompose, write task packets, review diffs, make design calls, integrate |
+| **Consultant** (max mode only) | `fable` | Plan-checkpoint design verdicts and pre-merge final review — briefs in, verdicts out, never implements |
 | **Implementer** | `sonnet` | Any coding task with a written spec: features, refactors, bug fixes with known root cause, tests |
 | **Mechanic** | `haiku` | Mechanical work: renames, batch replacements, config edits, running scripts, formatting |
 | **Scout** | `haiku` (or `sonnet` for gnarly codebases) | Read-only reconnaissance: "how does X work", "which files touch Y", "what's the current schema" |
