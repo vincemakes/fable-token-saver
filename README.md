@@ -4,7 +4,19 @@
 
 **Tiered model orchestration for Claude Code.** Keep your most expensive model (Fable, Opus — whatever tops the lineup) on judgment work only — decomposing, spec-writing, reviewing — while cheaper models (Sonnet/Haiku tiers) do the implementation. Objective gates (typecheck/tests) filter out everything a machine can catch before an expensive token is spent reviewing.
 
-Measured effect on a real 1,100-line task: **−34% strongest-tier quota in lite mode, −88% in max mode**, identical output quality. Full data in [BENCHMARKS.md](BENCHMARKS.md).
+## Should you use it? (the whole project in one screen)
+
+**✅ Worth it: large + constructive + specifiable tasks** (300+ lines / 6+ files — refactors, migrations, greenfield subsystems):
+
+- **lite mode** (Fable main loop): quota **−34%**, *also* the lowest total cost, quality even slightly better (+12% tests) — **the everyday default, just leave it on**
+- **max mode** (Opus main loop + Fable consultant): quota **−88%**, capability parity proven by a blind bug-hunt (6/6 vs 6/6) — but total cost **+86%**: you're buying quota with dollars. **Switch only when Fable quota is exhausted and the work must continue**
+
+**❌ Not worth it (the skill detects both and steps aside — also measured):**
+
+- **Small tasks** (< ~300 lines): quota goes *up* 34-66%
+- **Debugging / judgment-dense work, at any size**: reasoning can't be delegated — max mode paid 2.2× and took 3.9× longer for byte-identical quality
+
+Every number above is from real runs — full tables and methodology in [BENCHMARKS.md](BENCHMARKS.md).
 
 ## How it works
 
