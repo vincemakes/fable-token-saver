@@ -7,7 +7,7 @@ description: Tiered model orchestration for Claude Code. The main-loop model (wh
 
 ## Modes: detect, don't configure
 
-The skill has two modes, selected by which model powers the main loop — the user picks the mode by picking the session model (`/model`), and you adapt. Mode names describe **saving intensity** (lite = saves less, max = saves most), not model strength:
+The skill has two modes, selected by which model powers the main loop — the user picks the mode by picking the session model (`/model`), and you adapt. Detecting which model that is has a procedure (below); run it before anything else, because your own idea of what model you are can be wrong. Mode names describe **saving intensity** (lite = saves less, max = saves most), not model strength:
 
 **lite mode — the strongest tier IS the main loop (e.g. Fable).** You are both orchestrator and final authority. Follow the full workflow below. Measured effect: −42% strongest-tier consumption on large tasks.
 
@@ -21,6 +21,21 @@ Division of labor at the plan checkpoint: **you draft** the decomposition and in
 Prefer an **Opus-class** main loop for max mode. In benchmarks, an Opus main loop used the consultant with discipline (two clean checkpoints, −89% strongest-tier burn), while a Sonnet-class main loop leaned on the consultant 3.7× harder and eroded most of the savings (−61%). If you ARE a Sonnet-class main loop: the two checkpoints are the ONLY consultant calls you get — batch your questions into them, never open ad-hoc consultations.
 
 The consultant never implements and never sees the raw conversation — briefs only. If the strongest tier isn't available on this account, use the best tier above your own as consultant, or proceed as final authority if none exists. Skip the consultant only when the user explicitly opts out ("no fable", strongest-tier quota exhausted); then you are the final authority. Why this shape: the main loop pays strongest-tier rates for every tool result and every turn of bookkeeping — moving the main loop down a tier and buying strongest-tier judgment only at the two moments it actually differs (~3-5k tokens) cuts strongest-tier burn by an estimated 80-85%.
+
+### Detect the mode before anything else
+
+You cannot introspect your own weights, and the model-identity boilerplate in your system prompt ("You are powered by …", "This iteration of Claude is …") can be a static template that does not track the user's `/model` choice. Rank your sources:
+
+1. **The user's explicit statement** ("this session is on Opus") — always wins. If it contradicts your identity string, the user is right; switch modes immediately and continue.
+2. **Harness metadata naming the exact model ID** for this session — trust unless the user contradicts it.
+3. **Identity boilerplate prose** — weakest signal; never sufficient on its own to pick lite mode.
+
+The two misdetections are not symmetric. Wrongly picking **max** costs one wasted consultant call and exposes itself instantly — you would be consulting yourself. Wrongly picking **lite** silently deletes the strongest tier from the session: every design call gets made by a mid tier that believes it is the final authority, and nothing ever surfaces the loss. So when the main-loop model is uncertain, ask the user or default to **max** — never default to lite on the strength of the identity string alone.
+
+Two mandatory guardrails:
+
+- **Announce the verdict** in your first line of orchestration — "Main loop detected as `<model>` → `<mode>` mode" — so a wrong guess is visible and correctable while it is still cheap.
+- **Contradiction check**: if the user's own words presume a consultant above you ("have Fable review it", "走 fable") while you have detected yourself as that tier, treat it as a detection failure, not a user error — confirm the session model before proceeding in lite.
 
 ## The economics
 

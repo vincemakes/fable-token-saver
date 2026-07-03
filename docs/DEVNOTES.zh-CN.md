@@ -36,6 +36,7 @@
 4. **fixture 的 node_modules 千万别进 git**:会污染 `git diff`,直接破坏 skill 的 diff-only 审查流程
 5. zsh 里 `echo ===` 会触发等号展开报错;macOS BSD sed 不支持 BRE 的 `\|`(脱敏管道用 python 别用 sed)
 6. 后台单包派工会把 orchestrator 晾死(结果通知路由不回)→ SKILL.md 已写死"单包前台阻塞派工"
+7. **agent 自判主循环模型不可靠**(2026-07-03 实测):系统 prompt 里的身份串("You are powered by …")可能是静态模板,不跟 `/model` 走;用户选 Opus 的 session 里 agent 自判成 Fable → 误入 lite 模式,整个 session 一次都没调 Fable 顾问,且该丢失完全静默(误判 max 会当场暴露=自己咨询自己,误判 lite 不会)→ SKILL.md 已加"Detect the mode before anything else"一节:信源排序(用户明说 > harness 模型 ID > 身份串)、不确定时默认 max、首行宣告检测结果、矛盾检测(用户措辞预设你之上有顾问时先确认)
 
 ## 后续方向(未做)
 
