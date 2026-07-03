@@ -1,5 +1,7 @@
 # fable-token-saver
 
+![fable-token-saver — Claude Code 分层模型编排](media/og.png)
+
 [English](README.md) | **简体中文**
 
 **Claude Code 的分层模型编排。** 让最贵的模型(Fable、Opus——阵容里最强的那个)只干判断力工作——拆解、写规格、审查;实现全部交给便宜档(Sonnet/Haiku)。客观闸门(类型检查/测试)先把机器能抓的错全部过滤掉,贵模型一个 token 都不花在这些上面。

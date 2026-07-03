@@ -1,5 +1,7 @@
 # fable-token-saver
 
+![fable-token-saver — tiered model orchestration for Claude Code](media/og.png)
+
 **English** | [简体中文](README.zh-CN.md)
 
 **Tiered model orchestration for Claude Code.** Keep your most expensive model (Fable, Opus — whatever tops the lineup) on judgment work only — decomposing, spec-writing, reviewing — while cheaper models (Sonnet/Haiku tiers) do the implementation. Objective gates (typecheck/tests) filter out everything a machine can catch before an expensive token is spent reviewing.
