@@ -50,6 +50,26 @@ The exact quota-weighting formula isn't public, but per-token prices weight the 
 
 Note the zero in max-opus's cache-read column: the consultant never carries session context — two stateless brief-in/verdict-out calls, exactly as the protocol prescribes. That is where the 9× reduction comes from: in baseline and lite, the strongest model re-reads hundreds of thousands of cached context tokens every turn just by *being* the main loop.
 
+## Capability probe: the hidden-bug gauntlet
+
+The tables above prove cost differences on *constructive* work. This probe asks the harder question: **does moving Fable out of the main loop lose problem-solving ability on judgment-dense work?**
+
+Setup: a metering/billing module with **6 planted production-grade bugs** (half-open-interval double billing, per-line rounding drift, internal-reference leak, async lost-update race, stale memoized aggregate, lexicographic numeric-key ordering). The visible test suite passes despite all six. Each configuration received only four symptom-level bug reports (two reports mixed two root causes each) plus a behavior spec — then was graded against a **blind test suite it never saw**, one targeted test per bug.
+
+| | Baseline — Fable solo | max — Opus loop + Fable consultant |
+|---|---|---|
+| **Blind-suite score** | **6/6** | **6/6** |
+| Fable-attributed cost | $1.58 (doing everything) | **$1.76 (consultant only — MORE)** |
+| Total cost | **$1.58** | $3.45 (+118%) |
+| Time | **152s** | 586s (3.9×) |
+
+Two conclusions, one per direction:
+
+- **Capability parity is real.** The max configuration found and correctly fixed every planted bug, including the race condition and the aliasing bug — root-cause reasoning survives the consultant architecture intact.
+- **The economics invert on judgment-dense work.** In a debugging task, the *reasoning is the workload* — there is no cheap implementation volume to delegate. The consultant ended up doing more strongest-tier reasoning ($1.76) than solo Fable spent on the entire job ($1.58), with Opus and Sonnet billed on top. Orchestration here is pure bureaucracy: same quality, 2.2× the cost, 3.9× the time. This is measured confirmation of the skill's built-in rules — "do not trigger for debugging" and "design-heavy work stays with the orchestrator" were design intuitions; now they're data.
+
+(Caveat: n=1 task, single run per configuration — a capability probe, not a statistical claim.)
+
 ## Findings
 
 1. **Max mode delivers on its promise — for quota only.** With an Opus main loop, Fable spent $0.38 (two clean consultant checkpoints) — an 8× quota reduction. But total dollars went **up** 86%: the main-loop tax didn't disappear, it moved to Opus and grew (Opus emitted 60k output tokens in the role where Fable needed 17.9k).

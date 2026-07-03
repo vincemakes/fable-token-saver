@@ -53,7 +53,8 @@ Same 1,100-line greenfield task, four configurations, all gates green, quality a
 
 - **lite**: strongest-tier quota **−34%**, lowest total cost of any orchestrated config, most tests produced
 - **max (Opus loop)**: strongest-tier quota **−88%**, fastest (116s vs 335s baseline), but total cost +86%
-- **Small tasks (< ~300 lines): negative returns (+34~66% strongest-tier)** — the skill detects this and steps aside
+- **Capability parity verified by a blind bug-hunt**: 6 planted production-grade bugs, symptom-only reports, hidden test suite — baseline Fable **6/6**, max mode **6/6**. Root-cause reasoning survives the consultant architecture intact.
+- **Small tasks (< ~300 lines) and debugging: negative returns** (+34~66% strongest-tier on small tasks; on the bug hunt max mode cost 2.2× for identical quality) — the skill detects both and steps aside
 
 Full four-way tables, the itemized quota bill, per-model pricing, methodology, and honest findings (including why a Sonnet main loop loses on both metrics): **[BENCHMARKS.md](BENCHMARKS.md)**.
 
