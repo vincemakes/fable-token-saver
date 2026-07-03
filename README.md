@@ -88,6 +88,21 @@ One large task — a greenfield 8-module shopping-cart subsystem (~1,100 lines o
 | **max** — Opus 4.8 main loop, Fable consultant | **3,278 (−89%)** | **$0.38** | $5.66 | **116s** | 83 |
 | max variant — Sonnet 5 main loop | 12,152 (−61%) | $1.41 | $5.87 (highest) | 162s | 66 |
 
+### The Fable quota bill, itemized
+
+"Fable savings" above quotes output tokens, but subscription rate limits meter **weighted usage across every dimension** — input, output, cache writes, cache reads. Here is everything billed to Fable in each configuration, same task:
+
+| Configuration | Input | Output | Cache write | Cache read | Fable-attributed cost | Quota burn vs baseline |
+|---|---|---|---|---|---|---|
+| Baseline | 11,861 | 30,993 | 49,273 | 398,157 | $3.05 | — |
+| lite | 11,595 | 17,899 | 40,451 | 205,528 | $2.03 | **−34%** |
+| max (Opus loop) | 11,046 | 3,278 | 8,282 | **0** | $0.38 | **−88%** |
+| max (Sonnet loop) | 22,614 | 12,152 | 41,098 | 65,919 | $1.41 | −54% |
+
+The exact quota-weighting formula isn't public, but per-token prices weight the same dimensions the same way compute does — so the **Fable-attributed cost column is the best available proxy for quota burn**, and it's what the "savings" percentages throughout this README are anchored to.
+
+Note the zero in max-opus's cache-read column: the consultant never carries session context — two stateless brief-in/verdict-out calls, exactly as the protocol prescribes. That, not the output-token cut alone, is where the 9× reduction comes from: in baseline and lite, the strongest model re-reads hundreds of thousands of cached context tokens every turn just by *being* the main loop.
+
 Three honest findings:
 
 1. **Max mode delivers on its promise — for quota only.** With an Opus main loop, Fable spent just 3,278 tokens (two clean consultant checkpoints) — a 9× reduction. But total dollars went **up** 86%: the main-loop tax didn't disappear, it moved to Opus and grew (Opus emitted 60k output tokens in the same role where Fable needed 17.9k).
