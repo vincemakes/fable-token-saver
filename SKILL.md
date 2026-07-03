@@ -18,6 +18,8 @@ The skill has two modes, selected by which model powers the main loop — the us
 
 Division of labor at the plan checkpoint: **you draft** the decomposition and interface sketches (drafting is long-form and belongs on the cheap tier), the consultant only **rules** on them — keep/change verdicts, acceptance criteria, risks. Never ask the strongest tier to author what a mid tier can draft and it can judge.
 
+Prefer an **Opus-class** main loop for max mode. In benchmarks, an Opus main loop used the consultant with discipline (two clean checkpoints, −89% strongest-tier burn), while a Sonnet-class main loop leaned on the consultant 3.7× harder and eroded most of the savings (−61%). If you ARE a Sonnet-class main loop: the two checkpoints are the ONLY consultant calls you get — batch your questions into them, never open ad-hoc consultations.
+
 The consultant never implements and never sees the raw conversation — briefs only. If the strongest tier isn't available on this account, use the best tier above your own as consultant, or proceed as final authority if none exists. Skip the consultant only when the user explicitly opts out ("no fable", strongest-tier quota exhausted); then you are the final authority. Why this shape: the main loop pays strongest-tier rates for every tool result and every turn of bookkeeping — moving the main loop down a tier and buying strongest-tier judgment only at the two moments it actually differs (~3-5k tokens) cuts strongest-tier burn by an estimated 80-85%.
 
 ## The economics

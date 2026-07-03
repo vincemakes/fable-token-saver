@@ -21,11 +21,12 @@ No config file: the skill detects which model powers your main loop and adapts. 
 
 | | **lite** | **max** |
 |---|---|---|
-| Main loop (`/model`) | strongest tier (Fable) | mid tier (Opus 4.8 / Sonnet 5) |
+| Main loop (`/model`) | strongest tier (Fable) | mid tier (**Opus recommended**) |
 | Code written by | Sonnet / Haiku workers | Sonnet / Haiku workers |
-| Strongest tier's job | steers every step | **Consultant subagent** at 2 checkpoints only: plan verdict + pre-merge review (~3-5k tokens) |
-| Strongest-tier savings | **−42% (measured)** | **−80~85% (estimated)** |
-| Use when | you want top-tier judgment on every turn | quota crunch, huge tasks, or long grinding sessions |
+| Strongest tier's job | steers every step | **Consultant subagent** at 2 checkpoints only: plan verdict + pre-merge review |
+| Strongest-tier savings | **−42% (measured)** | **−89% measured** with an Opus main loop (−61% with Sonnet — see below) |
+| Total dollar cost | lowest of all orchestrated configs | **higher than baseline** (+86%) — this mode trades dollars for strongest-tier quota |
+| Use when | you want top-tier judgment on every turn | strongest-tier quota is exhausted and that's your binding constraint |
 
 Why max mode works: the main loop pays for every tool result and every turn of bookkeeping at main-loop rates — that "main-loop tax" dwarfed the actual judgment content in our benchmarks (17.9k spent vs ~5k of real decisions). Max mode moves the tax down a tier and buys strongest-tier judgment only at the two moments it actually differs. Say "no fable" to skip the consultant entirely when the strongest tier's quota is fully drained.
 
@@ -44,11 +45,11 @@ cp ~/.claude/skills/fable-token-saver/assets/agents/*.md .claude/agents/
 
 ## Use
 
-```
-/fable-token-saver build the CSV export feature described in issue #42
-```
+Three ways to start it, in any mode:
 
-Or just ask naturally — "delegate this to cheaper models and review the result". The skill also triggers proactively on well-specified multi-file tasks **above the delegation floor** (see Benchmarks — this matters).
+1. **Explicit** — `/fable-token-saver refactor the payments module`
+2. **Natural language** — "delegate this to cheaper models and review the result", "token-saver this task", "省token模式做这个", "用 token saver 走一下"
+3. **Proactive** — on sizable well-specified tasks (roughly 300+ lines or 6+ files) the skill triggers itself; below that delegation floor it deliberately stays out of the way (see Benchmarks — this matters).
 
 ## Core mechanics
 
@@ -76,19 +77,22 @@ Below the break-even point, writing the task packet and reviewing the diff costs
 
 **The delegation floor (now baked into the skill):** delegate only when ≥ ~300 new/changed lines, or ≥ ~6 files, or repetitive edits across many call sites. The skill refuses to orchestrate below this line and does the work directly in the main loop.
 
-### Large tasks: the skill pays off
+### Large tasks: the full four-way comparison
 
-One large task — a greenfield 8-module shopping-cart subsystem (~1,100 lines of code + tests written from scratch):
+One large task — a greenfield 8-module shopping-cart subsystem (~1,100 lines of code + tests written from scratch) — run four ways. All four passed every gate and every quality assertion (8/8 modules, all tests green):
 
-| Metric | With skill | Without skill | Δ |
-|---|---|---|---|
-| Fable output tokens | 17,899 | 30,993 | **−42%** |
-| Fable cost | $2.03 | $3.05 | **−34%** |
-| Total cost (all tiers) | $2.91 | $3.05 | −5% |
-| Wall-clock time | 465s | 335s | +39% |
-| Tests produced (all passing) | 91 | 81 | +12% |
+| Configuration | Fable output | Fable cost | Total cost | Time | Tests |
+|---|---|---|---|---|---|
+| Baseline — Fable does everything | 30,993 | $3.05 | $3.05 | 335s | 81 |
+| **lite** — Fable orchestrates, Sonnet implements | 17,899 (**−42%**) | $2.03 | **$2.91 (lowest)** | 465s | **91** |
+| **max** — Opus 4.8 main loop, Fable consultant | **3,278 (−89%)** | **$0.38** | $5.66 | **116s** | 83 |
+| max variant — Sonnet 5 main loop | 12,152 (−61%) | $1.41 | $5.87 (highest) | 162s | 66 |
 
-Sonnet 5 carried 25k output tokens of implementation while Fable spent its tokens on decomposition and review only. Quality assertions: 6/6 in both conditions — the with-skill run actually produced *more* test coverage.
+Three honest findings:
+
+1. **Max mode delivers on its promise — for quota only.** With an Opus main loop, Fable spent just 3,278 tokens (two clean consultant checkpoints) — a 9× reduction. But total dollars went **up** 86%: the main-loop tax didn't disappear, it moved to Opus and grew (Opus emitted 60k output tokens in the same role where Fable needed 17.9k).
+2. **The main-loop model's discipline matters more than its price.** Sonnet 5 costs 60% of Opus per token but leaned on the Fable consultant 3.7× harder and churned 4.6M cache-read tokens — losing on both metrics. Max mode's recommended main loop is **Opus-class**.
+3. **No orchestrated configuration beat the baseline on total dollars at this task size.** lite came closest (−5%). If dollars are your only metric, orchestration pays off only on tasks substantially larger than ~1,100 lines — or not at all. Know which wallet you're optimizing before turning this on.
 
 **Read the two tables together and the story is simple:** below the delegation floor the skill taxes you; above it, it cuts your strongest-tier consumption by roughly a third to a half, at the price of slower wall-clock.
 
