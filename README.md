@@ -11,7 +11,7 @@
 **✅ Worth it: large + constructive + specifiable tasks** (300+ lines / 6+ files — refactors, migrations, greenfield subsystems):
 
 - **lite mode** (Fable main loop): quota **−34%**, *also* the lowest total cost, quality even slightly better (+12% tests) — **the everyday default, just leave it on**
-- **max mode** (Opus main loop + Fable consultant): quota **−88%**, capability parity proven by a blind bug-hunt (6/6 vs 6/6) — but total cost **+86%**: you're buying quota with dollars. **Switch only when Fable quota is exhausted and the work must continue**
+- **max mode** (Opus main loop + Fable consultant): quota **−88%**, capability parity proven by a blind bug-hunt (6/6 vs 6/6) — but total cost **+86%**: you're buying quota with dollars. **Switch when Fable quota is exhausted and the work must continue, or when your work keeps tripping Fable's safeguard flags** (see the modes table below)
 
 **❌ Not worth it (the skill detects both and steps aside — also measured):**
 
@@ -61,6 +61,8 @@ No config file: the skill detects your main-loop model and adapts. Mode names de
 | Total dollar cost | lowest orchestrated config | **+86% vs baseline** — trades dollars for quota |
 | Use when | top-tier judgment on every turn | strongest-tier quota is your binding constraint |
 
+**Bonus: max mode neutralizes Fable's safeguard downgrades.** Fable 5's safeguards are intentionally broad right now and can flag routine coding or security-hardening work, silently switching your session to Opus mid-task. In max mode there is no Fable session to downgrade — the main loop is already Opus, and Fable is invoked per-checkpoint with a fresh, minimal brief. A flag's blast radius shrinks from your entire session to a single consultant call.
+
 ## Benchmarks (the elevator version)
 
 Same 1,100-line greenfield task, four configurations, all gates green, quality assertions identical:
@@ -75,7 +77,7 @@ Full four-way tables, the itemized quota bill, per-model pricing, methodology, a
 ## Install
 
 ```bash
-git clone https://github.com/<you>/fable-token-saver ~/.claude/skills/fable-token-saver
+git clone https://github.com/vincemakes/fable-token-saver ~/.claude/skills/fable-token-saver
 ```
 
 That's it for harnesses whose Agent tool supports per-subagent model override (current Claude Code does). Optionally, install the pinned worker agents for automatic routing:

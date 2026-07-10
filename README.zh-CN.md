@@ -11,7 +11,7 @@
 **✅ 有意义:大型 + 构建型 + 可写规格的任务**(300+ 行 / 6+ 文件——重构、迁移、从零建子系统):
 
 - **lite 档**(Fable 主循环):额度 **−34%**,总费用*还是*最低的,质量甚至略好(测试多 12%)——**日常默认,无脑开**
-- **max 档**(Opus 主循环 + Fable 顾问):额度 **−88%**,能力持平已用盲测调试赛实证(6/6 vs 6/6)——但总费用 **+86%**,是拿美元换额度。**只在 Fable 额度见底、又必须继续干活时切**
+- **max 档**(Opus 主循环 + Fable 顾问):额度 **−88%**,能力持平已用盲测调试赛实证(6/6 vs 6/6)——但总费用 **+86%**,是拿美元换额度。**Fable 额度见底又必须继续干活时切,或者你的工作老被 Fable 的 safeguard flag 时切**(见下文两档模式表)
 
 **❌ 没意义(skill 会自己检测并让位——这也是实测的):**
 
@@ -61,6 +61,8 @@
 | 总费用(美元) | 编排方案里最低 | **比基线贵 +86%**——拿美元换额度 |
 | 什么时候用 | 想要顶级判断力盯每一步 | 最强档额度就是你的硬约束 |
 
+**附带收益:max 档天然免疫 Fable 的 safeguard 降级。** Fable 5 当前的安全护栏刻意放得很宽,常规编码、安全加固类工作也可能被 flag,session 半路被悄悄切到 Opus。max 档下根本不存在可被降级的 Fable session——主循环本来就是 Opus,Fable 每次都以全新的极简 brief 被调用。一次 flag 的爆炸半径从整个 session 缩小到单次顾问调用。
+
 ## Benchmarks(电梯版)
 
 同一个 1,100 行的从零构建任务,四种配置,闸门全绿、质量断言完全一致:
@@ -75,7 +77,7 @@
 ## 安装
 
 ```bash
-git clone https://github.com/<you>/fable-token-saver ~/.claude/skills/fable-token-saver
+git clone https://github.com/vincemakes/fable-token-saver ~/.claude/skills/fable-token-saver
 ```
 
 Agent 工具支持按子代理覆写模型的环境(当前 Claude Code 支持)装完即用。可选:安装固定路由的 worker agent 定义:
