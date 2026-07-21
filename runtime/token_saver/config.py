@@ -74,7 +74,7 @@ _CREDENTIAL_KEYS = {
     "credentials",
 }
 _NAMED_VALUE = re.compile(
-    r"^(?P<name>[A-Za-z][A-Za-z0-9_-]{0,127})\s*[:=]"
+    r"(?<![A-Za-z0-9])(?P<name>[A-Za-z][A-Za-z0-9_-]{0,127})\s*[:=]"
 )
 _NAMED_OPTION = re.compile(
     r"^-{1,2}(?P<name>[A-Za-z][A-Za-z0-9_-]{0,127})(?:=|$)"
@@ -157,7 +157,7 @@ def _is_credential_key(key: str) -> bool:
 def _looks_like_credential_value(value: str) -> bool:
     stripped = value.strip()
     lowered = stripped.lower()
-    named_value = _NAMED_VALUE.match(stripped)
+    named_values = _NAMED_VALUE.finditer(stripped)
     named_option = _NAMED_OPTION.match(stripped)
     return (
         lowered.startswith("bearer ")
@@ -166,12 +166,12 @@ def _looks_like_credential_value(value: str) -> bool:
             ("ghp_", "gho_", "ghu_", "ghs_", "ghr_", "xoxb-", "xoxp-")
         )
         or "-----begin private key-----" in lowered
-        or (
-            named_value is not None
-            and _is_credential_name(
+        or any(
+            _is_credential_name(
                 named_value.group("name"),
                 embedded_single_terms=False,
             )
+            for named_value in named_values
         )
         or (
             named_option is not None

@@ -289,6 +289,9 @@ class ConfigValidationTests(unittest.TestCase):
             ["worker-bin", "--access_token", secret],
             ["worker-bin", f"OPENAI_API_KEY={secret}"],
             ["worker-bin", f"X-API-Key: {secret}"],
+            ["worker-bin", f"--header=X-API-Key: {secret}"],
+            ["worker-bin", f"--header=Authorization: Basic {secret}"],
+            ["worker-bin", f"--env=OPENAI_API_KEY={secret}"],
         )
         for command in commands:
             profile = _base_profile()
@@ -307,6 +310,7 @@ class ConfigValidationTests(unittest.TestCase):
                     "--access_token",
                     "OPENAI_API_KEY",
                     "X-API-Key",
+                    "Authorization",
                 )
                 self.assertIn("credential", str(error).lower())
 
@@ -324,6 +328,9 @@ class ConfigValidationTests(unittest.TestCase):
                 "100",
                 "OPENAI_API_KEYSTONE=value",
                 "X-API-Keynote: chapter",
+                "--env=OPENAI_API_KEYSTONE=value",
+                "--header=X-API-Keynote: chapter",
+                "--header=Authorization-Mode: basic",
             ],
         }
         loaded = load_config_layers(profile=profile)
