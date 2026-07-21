@@ -874,6 +874,38 @@ class PreferenceAndWorkerTests(unittest.TestCase):
                 worker="main loop",
             )
 
+        same_reviewer = _route(
+            "same-reviewer",
+            TERRA,
+            role=Role.REVIEWER,
+            band=CapabilityBand.AUTHORITY,
+        )
+        same_candidate = resolve_candidates(
+            _main(TERRA, CapabilityBand.BALANCED),
+            _config(
+                (same_reviewer,),
+                mode=Mode.MAX,
+                reviewers=(same_reviewer.route_id,),
+            ),
+            RunOverrides(),
+        )
+        with self.assertRaisesRegex(ValueError, "preflight_candidates"):
+            PreflightReport(
+                candidate=same_candidate,
+                status=Status.OK,
+                resolved_mode=Mode.MAX,
+                selected_reviewer_route_id=same_reviewer.route_id,
+                eligible_reviewer_route_ids=(same_reviewer.route_id,),
+            )
+        with self.assertRaisesRegex(ValueError, "finalize_resolution"):
+            Resolution(
+                status=Status.OK,
+                candidate=same_candidate,
+                mode=Mode.MAX,
+                authority_route_id=same_reviewer.route_id,
+                worker="main loop",
+            )
+
     def test_probe_mapping_key_must_match_embedded_route_id(self) -> None:
         reviewer = _route(
             "sol-reviewer",

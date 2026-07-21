@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
@@ -145,11 +145,11 @@ class Route:
     read_only: bool
     model: str | None = None
     provider_family: str | None = None
-    variant: str | None = None
     command: tuple[str, ...] = ()
     timeout_seconds: int = 600
     retry_policy: RetryPolicy = RetryPolicy()
     credential_env: tuple[CredentialBinding, ...] = ()
+    variant: str | None = None
 
     def __post_init__(self) -> None:
         _require_non_empty_text(self.route_id, "route_id")
@@ -618,6 +618,7 @@ class PreflightReport:
     eligible_worker_route_ids: tuple[str, ...] = ()
     ineligible_worker_route_ids: tuple[str, ...] = ()
     facts: tuple[str, ...] = ()
+    _issuer: object | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.candidate, CandidateTopology):
@@ -743,6 +744,8 @@ class PreflightReport:
             if len(self.eligible_reviewer_route_ids) != 1:
                 raise ValueError("successful Max requires one unambiguous reviewer")
         object.__setattr__(self, "facts", _normalize_facts(self.facts))
+        if self._issuer is not _PREFLIGHT_ISSUER:
+            raise ValueError("PreflightReport must be produced by preflight_candidates")
 
 
 @dataclass(frozen=True)
@@ -755,6 +758,12 @@ class Resolution:
     authority_route_id: str | None
     worker: str
     facts: tuple[str, ...] = ()
+    preflight_report: PreflightReport | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
+    _issuer: object | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         try:
@@ -829,6 +838,28 @@ class Resolution:
         if status is Status.OK and self.mode is Mode.LITE and self.worker == "main loop":
             raise ValueError("Lite worker must be a configured route or none")
         object.__setattr__(self, "facts", _normalize_facts(self.facts))
+        if self._issuer is not _RESOLUTION_ISSUER:
+            raise ValueError("Resolution must be produced by finalize_resolution")
+        report = self.preflight_report
+        if not isinstance(report, PreflightReport):
+            raise ValueError("Resolution requires its verified preflight report")
+        if report.candidate != self.candidate or report.status is not status:
+            raise ValueError("Resolution does not match its preflight report")
+        if report.resolved_mode is not self.mode or report.facts != self.facts:
+            raise ValueError("Resolution changed verified preflight facts")
+        expected_authority = (
+            report.selected_reviewer_route_id if self.mode is Mode.MAX else None
+        )
+        if self.authority_route_id != expected_authority:
+            raise ValueError("Resolution changed the verified authority route")
+        if report.selected_worker_route_id is not None:
+            expected_worker = report.selected_worker_route_id
+        elif self.mode is Mode.MAX:
+            expected_worker = "main loop"
+        else:
+            expected_worker = "none"
+        if self.worker != expected_worker:
+            raise ValueError("Resolution changed the verified worker route")
 
     @property
     def main(self) -> MainLoop | None:
@@ -864,3 +895,19 @@ def _normalize_facts(values: object) -> tuple[str, ...]:
     for value in values:
         _require_non_empty_text(value, "fact")
     return tuple(values)
+
+
+_PREFLIGHT_ISSUER = object()
+_RESOLUTION_ISSUER = object()
+
+
+def _verified_preflight_report(**kwargs: object) -> PreflightReport:
+    """Internal constructor used only after route probe validation."""
+
+    return PreflightReport(**kwargs, _issuer=_PREFLIGHT_ISSUER)  # type: ignore[arg-type]
+
+
+def _finalized_resolution(**kwargs: object) -> Resolution:
+    """Internal constructor that binds a resolution to its preflight report."""
+
+    return Resolution(**kwargs, _issuer=_RESOLUTION_ISSUER)  # type: ignore[arg-type]

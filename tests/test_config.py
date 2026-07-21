@@ -183,6 +183,20 @@ class ModelContractTests(unittest.TestCase):
         self.assertIsInstance(route.roles, frozenset)
         self.assertEqual(route.roles, frozenset({Role.SCOUT, Role.MECHANIC}))
 
+    def test_route_variant_does_not_break_legacy_positional_command(self) -> None:
+        route = Route(
+            "legacy-worker",
+            Transport.EXTERNAL_CLI,
+            CapabilityBand.BALANCED,
+            frozenset({Role.WORKER}),
+            False,
+            "worker-model",
+            "test-provider",
+            ("worker-bin", "--json"),
+        )
+        self.assertEqual(route.command, ("worker-bin", "--json"))
+        self.assertIsNone(route.variant)
+
     def test_route_rejects_duplicate_credential_child_names(self) -> None:
         duplicates = (
             (

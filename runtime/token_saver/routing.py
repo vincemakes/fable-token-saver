@@ -21,6 +21,8 @@ from .models import (
     RunOverrides,
     Status,
     Transport,
+    _finalized_resolution,
+    _verified_preflight_report,
 )
 
 __all__ = (
@@ -254,7 +256,7 @@ def preflight_candidates(
         raise ValueError("candidate must be CandidateTopology")
     probes = _validate_probe_mapping(route_probe_results)
     if candidate.status is not Status.OK:
-        return PreflightReport(
+        return _verified_preflight_report(
             candidate=candidate,
             status=candidate.status,
             resolved_mode=None,
@@ -283,7 +285,7 @@ def preflight_candidates(
     requested_mode = candidate.requested_mode
     main = candidate.main
     if requested_mode is Mode.LITE:
-        return PreflightReport(
+        return _verified_preflight_report(
             candidate=candidate,
             status=Status.OK,
             resolved_mode=Mode.LITE,
@@ -297,7 +299,7 @@ def preflight_candidates(
 
     if requested_mode is Mode.AUTO and main is not None:
         if main.band is CapabilityBand.AUTHORITY:
-            return PreflightReport(
+            return _verified_preflight_report(
                 candidate=candidate,
                 status=Status.OK,
                 resolved_mode=Mode.LITE,
@@ -309,7 +311,7 @@ def preflight_candidates(
                 facts=tuple(worker_facts),
             )
         if main.band is CapabilityBand.FAST:
-            return PreflightReport(
+            return _verified_preflight_report(
                 candidate=candidate,
                 status=Status.NEEDS_CONTEXT,
                 resolved_mode=None,
@@ -330,7 +332,7 @@ def preflight_candidates(
             if requested_mode is Mode.MAX
             else Status.NEEDS_CONTEXT
         )
-        return PreflightReport(
+        return _verified_preflight_report(
             candidate=candidate,
             status=status,
             resolved_mode=None,
@@ -343,7 +345,7 @@ def preflight_candidates(
         )
 
     if not eligible_reviewers:
-        return PreflightReport(
+        return _verified_preflight_report(
             candidate=candidate,
             status=Status.REVIEWER_UNAVAILABLE,
             resolved_mode=None,
@@ -354,7 +356,7 @@ def preflight_candidates(
         )
 
     if len(eligible_reviewers) > 1:
-        return PreflightReport(
+        return _verified_preflight_report(
             candidate=candidate,
             status=Status.NEEDS_CONTEXT,
             resolved_mode=None,
@@ -369,7 +371,7 @@ def preflight_candidates(
             ),
         )
 
-    return PreflightReport(
+    return _verified_preflight_report(
         candidate=candidate,
         status=Status.OK,
         resolved_mode=Mode.MAX,
@@ -397,13 +399,14 @@ def finalize_resolution(
         raise ValueError("preflight report does not belong to this candidate topology")
 
     if preflight_report.status is not Status.OK:
-        return Resolution(
+        return _finalized_resolution(
             status=preflight_report.status,
             candidate=candidate,
             mode=None,
             authority_route_id=None,
             worker="none",
             facts=preflight_report.facts,
+            preflight_report=preflight_report,
         )
 
     mode = preflight_report.resolved_mode
@@ -421,11 +424,12 @@ def finalize_resolution(
     else:
         worker = "none"
 
-    return Resolution(
+    return _finalized_resolution(
         status=Status.OK,
         candidate=candidate,
         mode=mode,
         authority_route_id=authority_route_id,
         worker=worker,
         facts=preflight_report.facts,
+        preflight_report=preflight_report,
     )
