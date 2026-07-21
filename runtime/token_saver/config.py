@@ -43,6 +43,24 @@ _OVERRIDE_FIELDS = {
     "scout": "scouts",
     "mechanic": "mechanics",
 }
+_SCAN_FIELDS = {
+    "layer": {"schema_version", "mode", "routes", "preferences", "capabilities"},
+    "route": {
+        "transport",
+        "band",
+        "roles",
+        "read_only",
+        "model",
+        "provider_family",
+        "command",
+        "timeout_seconds",
+        "retry_policy",
+        "credential_env",
+    },
+    "preferences": set(_PREFERENCE_FIELDS),
+    "retry_policy": {"worker_attempts", "review_revisions"},
+    "credential_binding": {"child_name", "source_name"},
+}
 _CREDENTIAL_KEYS = {
     "apikey",
     "token",
@@ -55,11 +73,11 @@ _CREDENTIAL_KEYS = {
     "credential",
     "credentials",
 }
-_SENSITIVE_ASSIGNMENT = re.compile(
-    r"(?i)^(?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|authorization)\s*[:=]"
+_NAMED_VALUE = re.compile(
+    r"^(?P<name>[A-Za-z][A-Za-z0-9_-]{0,127})\s*[:=]"
 )
-_SENSITIVE_OPTION = re.compile(
-    r"(?i)^-{1,2}(?:api[-_]?key|access[-_]?token|refresh[-_]?token|token|secret|password|authorization)(?:=|$)"
+_NAMED_OPTION = re.compile(
+    r"^-{1,2}(?P<name>[A-Za-z][A-Za-z0-9_-]{0,127})(?:=|$)"
 )
 _JWT_VALUE = re.compile(
     r"^[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{8,}$"
@@ -92,17 +110,55 @@ def _compact_key(key: str) -> str:
     return re.sub(r"[^a-z0-9]", "", key.lower())
 
 
-def _is_credential_key(key: str) -> bool:
-    compact = _compact_key(key)
+def _name_parts(name: str) -> tuple[str, ...]:
+    with_camel_boundaries = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name)
+    return tuple(
+        part
+        for part in re.split(r"[^a-z0-9]+", with_camel_boundaries.lower())
+        if part
+    )
+
+
+def _is_credential_name(name: str, *, embedded_single_terms: bool) -> bool:
+    compact = _compact_key(name)
     if compact in _CREDENTIAL_KEYS:
         return True
-    segments = tuple(part for part in re.split(r"[^a-z0-9]+", key.lower()) if part)
-    return any(part in {"token", "secret", "password", "authorization"} for part in segments)
+    parts = _name_parts(name)
+    pairs = tuple(zip(parts, parts[1:]))
+    if any(
+        pair in {
+            ("api", "key"),
+            ("access", "token"),
+            ("refresh", "token"),
+            ("client", "secret"),
+        }
+        for pair in pairs
+    ):
+        return True
+    sensitive_single_terms = {
+        "token",
+        "secret",
+        "password",
+        "authorization",
+        "credential",
+        "credentials",
+    }
+    if parts and parts[-1] in sensitive_single_terms:
+        return True
+    return embedded_single_terms and any(
+        part in sensitive_single_terms for part in parts
+    )
+
+
+def _is_credential_key(key: str) -> bool:
+    return _is_credential_name(key, embedded_single_terms=True)
 
 
 def _looks_like_credential_value(value: str) -> bool:
     stripped = value.strip()
     lowered = stripped.lower()
+    named_value = _NAMED_VALUE.match(stripped)
+    named_option = _NAMED_OPTION.match(stripped)
     return (
         lowered.startswith("bearer ")
         or lowered.startswith("sk-")
@@ -110,8 +166,20 @@ def _looks_like_credential_value(value: str) -> bool:
             ("ghp_", "gho_", "ghu_", "ghs_", "ghr_", "xoxb-", "xoxp-")
         )
         or "-----begin private key-----" in lowered
-        or _SENSITIVE_ASSIGNMENT.match(stripped) is not None
-        or _SENSITIVE_OPTION.match(stripped) is not None
+        or (
+            named_value is not None
+            and _is_credential_name(
+                named_value.group("name"),
+                embedded_single_terms=False,
+            )
+        )
+        or (
+            named_option is not None
+            and _is_credential_name(
+                named_option.group("name"),
+                embedded_single_terms=False,
+            )
+        )
         or _JWT_VALUE.fullmatch(stripped) is not None
         or _AWS_ACCESS_KEY.fullmatch(stripped) is not None
         or _GOOGLE_API_KEY.fullmatch(stripped) is not None
@@ -124,11 +192,33 @@ def _child_path(parent: str, child: str) -> str:
     return f"{parent}.{child}"
 
 
+def _safe_path_component(key: str, context: str) -> str:
+    if context == "routes":
+        return "<route>"
+    if key in _SCAN_FIELDS.get(context, set()):
+        return key
+    return "<field>"
+
+
+def _child_scan_context(key: str, context: str) -> str:
+    if context == "layer" and key == "routes":
+        return "routes"
+    if context == "layer" and key == "preferences":
+        return "preferences"
+    if context == "routes":
+        return "route"
+    if context == "route" and key == "retry_policy":
+        return "retry_policy"
+    if context == "route" and key == "credential_env":
+        return "credential_binding"
+    return "opaque"
+
+
 def _scan_for_forbidden(
     value: object,
     path: str,
     *,
-    credential_env: bool = False,
+    context: str = "layer",
 ) -> None:
     """Reject immutable-main-loop and credential material before shape errors."""
 
@@ -136,20 +226,25 @@ def _scan_for_forbidden(
         for key, child in value.items():
             if not isinstance(key, str):
                 raise ConfigError(path or "config", "object keys must be strings")
-            child_path = _child_path(path, key)
             compact = _compact_key(key)
             if compact == "mainloop":
-                raise ConfigError(child_path, "is host-controlled and cannot be configured")
-            is_binding = compact == "credentialenv"
-            if not is_binding and _is_credential_key(key):
+                raise ConfigError(
+                    _child_path(path, "main_loop"),
+                    "is host-controlled and cannot be configured",
+                )
+            approved_binding = context == "route" and key == "credential_env"
+            if (compact == "credentialenv" and not approved_binding) or (
+                not approved_binding and _is_credential_key(key)
+            ):
                 raise ConfigError(
                     _child_path(path, "<credential>"),
                     "credential material is not allowed",
                 )
+            child_path = _child_path(path, _safe_path_component(key, context))
             _scan_for_forbidden(
                 child,
                 child_path,
-                credential_env=credential_env or is_binding,
+                context=_child_scan_context(key, context),
             )
         return
     if isinstance(value, (list, tuple)):
@@ -157,10 +252,10 @@ def _scan_for_forbidden(
             _scan_for_forbidden(
                 child,
                 f"{path}[{index}]",
-                credential_env=credential_env,
+                context=context,
             )
         return
-    if isinstance(value, str) and not credential_env and _looks_like_credential_value(value):
+    if isinstance(value, str) and _looks_like_credential_value(value):
         raise ConfigError(path or "config", "credential material is not allowed")
 
 
@@ -245,7 +340,7 @@ def _parse_credential_env(value: object, path: str) -> tuple[CredentialBinding, 
 
 
 def _parse_route(route_id: str, value: object) -> Route:
-    path = f"routes.{route_id}"
+    path = "routes.<route>"
     if not isinstance(route_id, str) or not route_id.strip():
         raise ConfigError("routes.<route>", "route identifiers must be non-empty strings")
     mapping = _expect_mapping(value, path)

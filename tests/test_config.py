@@ -268,7 +268,7 @@ class ConfigValidationTests(unittest.TestCase):
                     "worker --run",
                     "ultra-secret-command",
                 )
-                self.assertIn("routes.worker.command", str(error))
+                self.assertIn("routes.<route>.command", str(error))
 
         profile = _base_profile()
         profile["routes"]["worker"] = {
@@ -287,6 +287,8 @@ class ConfigValidationTests(unittest.TestCase):
             ["worker-bin", "--api-key", secret],
             ["worker-bin", f"--api-key={secret}"],
             ["worker-bin", "--access_token", secret],
+            ["worker-bin", f"OPENAI_API_KEY={secret}"],
+            ["worker-bin", f"X-API-Key: {secret}"],
         )
         for command in commands:
             profile = _base_profile()
@@ -303,8 +305,29 @@ class ConfigValidationTests(unittest.TestCase):
                     secret,
                     "--api-key",
                     "--access_token",
+                    "OPENAI_API_KEY",
+                    "X-API-Key",
                 )
                 self.assertIn("credential", str(error).lower())
+
+    def test_credential_detection_does_not_reject_benign_similar_words(self) -> None:
+        profile = _base_profile()
+        profile["routes"]["worker"] = {
+            "transport": "external-cli",
+            "band": "balanced",
+            "roles": ["worker"],
+            "read_only": False,
+            "model": "tokenizer-v2",
+            "command": [
+                "worker-bin",
+                "--token-budget",
+                "100",
+                "OPENAI_API_KEYSTONE=value",
+                "X-API-Keynote: chapter",
+            ],
+        }
+        loaded = load_config_layers(profile=profile)
+        self.assertEqual(loaded.routes["worker"].model, "tokenizer-v2")
 
     def test_retry_values_are_validated_in_config(self) -> None:
         for field in ("worker_attempts", "review_revisions"):
@@ -339,7 +362,7 @@ class ConfigValidationTests(unittest.TestCase):
                     lambda profile=profile: load_config_layers(profile=profile),
                     name,
                 )
-                self.assertIn(f"credential_env[0].{field}", str(error))
+                self.assertIn(f"routes.<route>.credential_env[0].{field}", str(error))
 
     def test_rejects_credential_like_keys_and_values_recursively(self) -> None:
         secret = "never-echo-this-secret-material"
@@ -380,6 +403,80 @@ class ConfigValidationTests(unittest.TestCase):
             "never-echo-key-material",
         )
         self.assertIn("<credential>", error.path)
+
+    def test_rejects_provider_prefixed_credential_keys(self) -> None:
+        secret = "provider-prefixed-never-echo"
+        cases = (
+            {"openai_api_key": secret},
+            {"provider": {"anthropic_access_token": secret}},
+            {"provider": {"customClientSecret": secret}},
+        )
+        for payload in cases:
+            with self.subTest(payload=tuple(payload)):
+                error = self.assert_config_error_redacts(
+                    lambda payload=payload: load_config_layers(
+                        profile=_base_profile(),
+                        user=_layer(**payload),
+                    ),
+                    secret,
+                    "openai_api_key",
+                    "anthropic_access_token",
+                    "customClientSecret",
+                )
+                self.assertIn("<credential>", error.path)
+
+    def test_credential_env_exemption_is_limited_to_route_bindings(self) -> None:
+        secret = "credential-env-scope-never-echo"
+        profile = _base_profile()
+        profile["capabilities"] = {
+            "metadata": {
+                "credential_env": {
+                    "header": f"Bearer {secret}",
+                }
+            }
+        }
+        error = self.assert_config_error_redacts(
+            lambda: load_config_layers(profile=profile),
+            secret,
+            f"Bearer {secret}",
+        )
+        self.assertIn("credential", str(error).lower())
+
+        error = self.assert_config_error_redacts(
+            lambda: load_config_layers(
+                profile=_base_profile(),
+                user=_layer(credential_env={"value": secret}),
+            ),
+            secret,
+        )
+        self.assertIn("credential", str(error).lower())
+
+    def test_error_paths_redact_all_arbitrary_mapping_keys(self) -> None:
+        secret_key = "attacker-controlled-never-echo-key"
+        profile = _base_profile()
+        profile["capabilities"] = {
+            secret_key: {
+                "header": "Bearer credential-material",
+            }
+        }
+        error = self.assert_config_error_redacts(
+            lambda: load_config_layers(profile=profile),
+            secret_key,
+            "attacker-controlled-never-echo-key",
+            "credential-material",
+        )
+        self.assertIn("profile.capabilities.<field>.<field>", error.path)
+
+        route_key = "route-id-never-echo-key"
+        profile = _base_profile()
+        profile["routes"][route_key] = {**_worker_route(), "transport": "bogus"}  # type: ignore[index]
+        error = self.assert_config_error_redacts(
+            lambda: load_config_layers(profile=profile),
+            route_key,
+            "route-id-never-echo-key",
+            "bogus",
+        )
+        self.assertIn("routes.<route>.transport", error.path)
 
 
 class ConfigMergeTests(unittest.TestCase):
