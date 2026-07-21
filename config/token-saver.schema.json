@@ -169,6 +169,14 @@
           "minLength": 1,
           "pattern": ".*\\S.*"
         },
+        "variant": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "pattern": ".*\\S.*"
+        },
         "command": {
           "$ref": "#/$defs/command"
         },

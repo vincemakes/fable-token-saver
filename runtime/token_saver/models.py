@@ -145,6 +145,7 @@ class Route:
     read_only: bool
     model: str | None = None
     provider_family: str | None = None
+    variant: str | None = None
     command: tuple[str, ...] = ()
     timeout_seconds: int = 600
     retry_policy: RetryPolicy = RetryPolicy()
@@ -177,6 +178,7 @@ class Route:
         for field_name, value in (
             ("model", self.model),
             ("provider_family", self.provider_family),
+            ("variant", self.variant),
         ):
             if value is not None:
                 _require_non_empty_text(value, field_name)
@@ -227,15 +229,18 @@ def _sandbox_binding_hash(
     route_state_identity: str,
     profile_hash: str,
 ) -> str:
-    fields = (
-        route_id.encode("utf-8"),
-        transport.value.encode("ascii"),
-        len(command).to_bytes(8, "big"),
-        *(member.encode("utf-8") for member in command),
-        worktree_identity.encode("ascii"),
-        route_state_identity.encode("ascii"),
-        profile_hash.encode("ascii"),
-    )
+    try:
+        fields = (
+            route_id.encode("utf-8"),
+            transport.value.encode("ascii"),
+            len(command).to_bytes(8, "big"),
+            *(member.encode("utf-8") for member in command),
+            worktree_identity.encode("ascii"),
+            route_state_identity.encode("ascii"),
+            profile_hash.encode("ascii"),
+        )
+    except (UnicodeError, OverflowError):
+        raise ValueError("sandbox binding fields must be safely encodable") from None
     encoded = bytearray(b"TOKEN-SAVER-SANDBOX-BINDING\0")
     for field in fields:
         encoded.extend(len(field).to_bytes(8, "big"))
@@ -274,9 +279,7 @@ class WorkerSandboxIdentity:
             "profile_hash",
             "binding_hash",
         ):
-            value = getattr(self, field_name)
-            if not isinstance(value, str) or _SHA256_HEX.fullmatch(value) is None:
-                raise ValueError(f"{field_name} must be a lowercase SHA-256")
+            _require_sha256(getattr(self, field_name), field_name)
         expected = _sandbox_binding_hash(
             route_id=self.route_id,
             transport=transport,
@@ -301,6 +304,14 @@ class WorkerSandboxIdentity:
     ) -> WorkerSandboxIdentity:
         if not isinstance(route, Route):
             raise ValueError("route must be a Route")
+        if route.transport is not Transport.EXTERNAL_CLI:
+            raise ValueError("worker sandbox identity requires external-cli route")
+        for field_name, value in (
+            ("worktree_identity", worktree_identity),
+            ("route_state_identity", route_state_identity),
+            ("profile_hash", profile_hash),
+        ):
+            _require_sha256(value, field_name)
         binding_hash = _sandbox_binding_hash(
             route_id=route.route_id,
             transport=route.transport,
@@ -328,6 +339,12 @@ class WorkerSandboxIdentity:
         )
 
 
+def _require_sha256(value: object, field_name: str) -> str:
+    if not isinstance(value, str) or _SHA256_HEX.fullmatch(value) is None:
+        raise ValueError(f"{field_name} must be a lowercase SHA-256")
+    return value
+
+
 @dataclass(frozen=True)
 class Preferences:
     reviewers: tuple[str, ...] = ()
@@ -343,6 +360,8 @@ class Preferences:
             ):
                 raise ValueError(f"{field_name} must contain route identifiers")
             normalized = tuple(values)
+            for route_id in normalized:
+                _require_non_empty_text(route_id, field_name)
             if len(set(normalized)) != len(normalized):
                 raise ValueError(f"{field_name} must not contain duplicates")
             object.__setattr__(self, field_name, normalized)
@@ -455,7 +474,8 @@ class RouteProbeResult:
     executable_available: bool
     native_agent_available: bool
     reviewer_read_only_enforced: bool
-    verified_worker_sandbox_identity: WorkerSandboxIdentity | None
+    expected_worker_sandbox_identity: WorkerSandboxIdentity | None = None
+    verified_worker_sandbox_identity: WorkerSandboxIdentity | None = None
     configured_credentials: tuple[str, ...] = ()
     missing_credentials: tuple[str, ...] = ()
 
@@ -495,13 +515,18 @@ class RouteProbeResult:
             and self.fingerprint_evidence_source is None
         ):
             raise ValueError("resolved fingerprint requires an evidence source")
-        if self.verified_worker_sandbox_identity is not None and not isinstance(
-            self.verified_worker_sandbox_identity,
-            WorkerSandboxIdentity,
+        for field_name in (
+            "expected_worker_sandbox_identity",
+            "verified_worker_sandbox_identity",
         ):
-            raise ValueError(
-                "verified_worker_sandbox_identity must be exact sandbox proof"
-            )
+            value = getattr(self, field_name)
+            if value is not None and not isinstance(value, WorkerSandboxIdentity):
+                raise ValueError(f"{field_name} must be exact sandbox proof")
+        if (
+            self.verified_worker_sandbox_identity is not None
+            and self.expected_worker_sandbox_identity is None
+        ):
+            raise ValueError("verified sandbox identity requires an expected identity")
 
         for field_name in ("configured_credentials", "missing_credentials"):
             names = getattr(self, field_name)
@@ -557,6 +582,8 @@ class CandidateTopology:
             ):
                 raise ValueError(f"{field_name} must contain route identifiers")
             normalized = tuple(route_ids)
+            for route_id in normalized:
+                _require_non_empty_text(route_id, field_name)
             if len(set(normalized)) != len(normalized):
                 raise ValueError(f"{field_name} must not contain duplicates")
             object.__setattr__(self, field_name, normalized)
@@ -571,6 +598,8 @@ class CandidateTopology:
             raise ValueError("status must be a structured status") from exc
         if status not in {Status.OK, Status.NEEDS_CONTEXT}:
             raise ValueError("candidate status must be ok or needs_context")
+        if status is Status.OK and self.main is None:
+            raise ValueError("successful candidate selection requires a main loop")
         object.__setattr__(self, "status", status)
         object.__setattr__(self, "facts", _normalize_facts(self.facts))
 
@@ -598,6 +627,14 @@ class PreflightReport:
         except (TypeError, ValueError) as exc:
             raise ValueError("status must be a structured status") from exc
         object.__setattr__(self, "status", status)
+        if status not in {
+            Status.OK,
+            Status.NEEDS_CONTEXT,
+            Status.REVIEWER_UNAVAILABLE,
+        }:
+            raise ValueError("status is not valid during route preflight")
+        if self.candidate.status is not Status.OK and status is not self.candidate.status:
+            raise ValueError("blocked candidate cannot produce a different preflight status")
         if self.resolved_mode is not None:
             try:
                 mode = Mode(self.resolved_mode)
@@ -628,7 +665,49 @@ class PreflightReport:
                 isinstance(value, str) and value.strip() for value in values
             ):
                 raise ValueError(f"{field_name} must contain route identifiers")
-            object.__setattr__(self, field_name, tuple(values))
+            normalized = tuple(values)
+            for route_id in normalized:
+                _require_non_empty_text(route_id, field_name)
+            if len(set(normalized)) != len(normalized):
+                raise ValueError(f"{field_name} must not contain duplicates")
+            object.__setattr__(self, field_name, normalized)
+
+        if self.candidate.status is Status.OK:
+            partitions = (
+                (
+                    "reviewer",
+                    self.candidate.reviewer_route_ids,
+                    self.eligible_reviewer_route_ids,
+                    self.ineligible_reviewer_route_ids,
+                ),
+                (
+                    "worker",
+                    self.candidate.worker_route_ids,
+                    self.eligible_worker_route_ids,
+                    self.ineligible_worker_route_ids,
+                ),
+            )
+            for label, candidates, eligible, ineligible in partitions:
+                if set(eligible).intersection(ineligible) or set(eligible).union(
+                    ineligible
+                ) != set(candidates):
+                    raise ValueError(
+                        f"{label} eligibility must partition candidate {label} routes"
+                    )
+
+        for route_id in self.eligible_reviewer_route_ids:
+            route = self.candidate.routes.get(route_id)
+            if (
+                route is None
+                or Role.REVIEWER not in route.roles
+                or route.band is not CapabilityBand.AUTHORITY
+                or not route.read_only
+            ):
+                raise ValueError("eligible reviewer must be a configured authority route")
+        for route_id in self.eligible_worker_route_ids:
+            route = self.candidate.routes.get(route_id)
+            if route is None or Role.WORKER not in route.roles or route.read_only:
+                raise ValueError("eligible worker must be a configured write route")
         if (
             self.selected_reviewer_route_id is not None
             and self.selected_reviewer_route_id
@@ -649,6 +728,20 @@ class PreflightReport:
             raise ValueError("Lite preflight cannot select an external authority")
         if self.resolved_mode is Mode.MAX and self.selected_reviewer_route_id is None:
             raise ValueError("Max preflight requires a selected reviewer")
+        if self.resolved_mode is Mode.LITE:
+            if self.candidate.requested_mode not in {Mode.AUTO, Mode.LITE}:
+                raise ValueError("Lite preflight conflicts with the requested mode")
+            if (
+                self.candidate.requested_mode is Mode.AUTO
+                and self.candidate.main is not None
+                and self.candidate.main.band is not CapabilityBand.AUTHORITY
+            ):
+                raise ValueError("automatic Lite requires an authority main loop")
+        if self.resolved_mode is Mode.MAX:
+            if self.candidate.requested_mode not in {Mode.AUTO, Mode.MAX}:
+                raise ValueError("Max preflight conflicts with the requested mode")
+            if len(self.eligible_reviewer_route_ids) != 1:
+                raise ValueError("successful Max requires one unambiguous reviewer")
         object.__setattr__(self, "facts", _normalize_facts(self.facts))
 
 
@@ -657,11 +750,10 @@ class Resolution:
     """Final authority topology, or a fail-closed structured status."""
 
     status: Status
-    main: MainLoop | None
+    candidate: CandidateTopology
     mode: Mode | None
     authority_route_id: str | None
     worker: str
-    resolution_source: str
     facts: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -670,8 +762,8 @@ class Resolution:
         except (TypeError, ValueError) as exc:
             raise ValueError("status must be a structured status") from exc
         object.__setattr__(self, "status", status)
-        if self.main is not None and not isinstance(self.main, MainLoop):
-            raise ValueError("main must be a MainLoop or null")
+        if not isinstance(self.candidate, CandidateTopology):
+            raise ValueError("candidate must be CandidateTopology")
         if self.mode is not None:
             try:
                 mode = Mode(self.mode)
@@ -680,7 +772,7 @@ class Resolution:
             if mode is Mode.AUTO:
                 raise ValueError("mode cannot remain auto")
             object.__setattr__(self, "mode", mode)
-        if status is Status.OK and (self.main is None or self.mode is None):
+        if status is Status.OK and (self.candidate.main is None or self.mode is None):
             raise ValueError("successful resolution requires a main loop and mode")
         if status is not Status.OK and self.mode is not None:
             raise ValueError("blocked resolution cannot expose a successful mode")
@@ -695,9 +787,56 @@ class Resolution:
             self.authority_route_id is not None or self.worker != "none"
         ):
             raise ValueError("blocked resolution cannot expose a runnable topology")
-        if self.resolution_source not in {"profile", "user", "project", "explicit"}:
-            raise ValueError("resolution_source must be a supported source")
+        if status is Status.OK and self.mode is Mode.MAX:
+            route = self.candidate.routes.get(self.authority_route_id or "")
+            if (
+                route is None
+                or self.authority_route_id not in self.candidate.reviewer_route_ids
+                or Role.REVIEWER not in route.roles
+                or route.band is not CapabilityBand.AUTHORITY
+                or not route.read_only
+            ):
+                raise ValueError("Max authority must be a candidate reviewer route")
+        if status is Status.OK and self.mode is Mode.LITE:
+            if self.candidate.requested_mode not in {Mode.AUTO, Mode.LITE}:
+                raise ValueError("Lite resolution conflicts with the requested mode")
+            if (
+                self.candidate.requested_mode is Mode.AUTO
+                and self.candidate.main is not None
+                and self.candidate.main.band is not CapabilityBand.AUTHORITY
+            ):
+                raise ValueError("automatic Lite requires an authority main loop")
+        if status is Status.OK and self.mode is Mode.MAX:
+            if self.candidate.requested_mode not in {Mode.AUTO, Mode.MAX}:
+                raise ValueError("Max resolution conflicts with the requested mode")
+            if (
+                self.candidate.requested_mode is Mode.AUTO
+                and self.candidate.main is not None
+                and self.candidate.main.band is not CapabilityBand.BALANCED
+            ):
+                raise ValueError("automatic Max requires a balanced main loop")
+        if status is Status.OK and self.worker not in {"main loop", "none"}:
+            route = self.candidate.routes.get(self.worker)
+            if (
+                route is None
+                or self.worker not in self.candidate.worker_route_ids
+                or Role.WORKER not in route.roles
+                or route.read_only
+            ):
+                raise ValueError("worker must be a candidate write route")
+        if status is Status.OK and self.mode is Mode.MAX and self.worker == "none":
+            raise ValueError("Max implementation must use a worker or the main loop")
+        if status is Status.OK and self.mode is Mode.LITE and self.worker == "main loop":
+            raise ValueError("Lite worker must be a configured route or none")
         object.__setattr__(self, "facts", _normalize_facts(self.facts))
+
+    @property
+    def main(self) -> MainLoop | None:
+        return self.candidate.main
+
+    @property
+    def resolution_source(self) -> str:
+        return self.candidate.resolution_source
 
     def startup_verdict(self) -> str:
         """Serialize the five-line startup verdict only for valid topologies."""

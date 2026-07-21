@@ -52,6 +52,7 @@ _SCAN_FIELDS = {
         "read_only",
         "model",
         "provider_family",
+        "variant",
         "command",
         "timeout_seconds",
         "retry_policy",
@@ -400,6 +401,7 @@ def _parse_route(route_id: str, value: object) -> Route:
         "read_only",
         "model",
         "provider_family",
+        "variant",
         "command",
         "timeout_seconds",
         "retry_policy",
@@ -440,7 +442,7 @@ def _parse_route(route_id: str, value: object) -> Route:
         raise ConfigError(f"{path}.read_only", "reviewer-capable routes must be read-only")
 
     text_fields: dict[str, str | None] = {}
-    for field_name in ("model", "provider_family"):
+    for field_name in ("model", "provider_family", "variant"):
         candidate = mapping.get(field_name)
         if candidate is not None and (
             not isinstance(candidate, str) or not candidate.strip()
@@ -492,6 +494,7 @@ def _parse_route(route_id: str, value: object) -> Route:
             read_only=read_only,
             model=text_fields["model"],
             provider_family=text_fields["provider_family"],
+            variant=text_fields["variant"],
             command=tuple(raw_command),
             timeout_seconds=timeout_seconds,
             retry_policy=retry_policy,

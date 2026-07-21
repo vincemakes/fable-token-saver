@@ -10,7 +10,8 @@
       ],
       "read_only": true,
       "model": "fable",
-      "provider_family": "anthropic"
+      "provider_family": "anthropic",
+      "variant": "default"
     },
     "opus": {
       "transport": "host-subagent",
@@ -20,7 +21,8 @@
       ],
       "read_only": true,
       "model": "opus",
-      "provider_family": "anthropic"
+      "provider_family": "anthropic",
+      "variant": "default"
     },
     "sonnet": {
       "transport": "host-subagent",
@@ -30,7 +32,8 @@
       ],
       "read_only": false,
       "model": "sonnet",
-      "provider_family": "anthropic"
+      "provider_family": "anthropic",
+      "variant": "default"
     },
     "haiku": {
       "transport": "host-subagent",
@@ -41,7 +44,8 @@
       ],
       "read_only": false,
       "model": "haiku",
-      "provider_family": "anthropic"
+      "provider_family": "anthropic",
+      "variant": "default"
     }
   },
   "preferences": {

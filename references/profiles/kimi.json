@@ -10,7 +10,8 @@
       ],
       "read_only": true,
       "model": "kimi-k3",
-      "provider_family": "kimi"
+      "provider_family": "kimi",
+      "variant": "default"
     },
     "claude-kimi": {
       "transport": "external-cli",
@@ -41,7 +42,8 @@
       "requires_exact_host_identity": true,
       "requires_preflight_identity": true,
       "provider_family": "kimi",
-      "resolved_model_id": "kimi-k3"
+      "resolved_model_id": "kimi-k3",
+      "variant": "default"
     },
     "claude-kimi": {
       "proves_authority": false,

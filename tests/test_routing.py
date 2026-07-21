@@ -5,16 +5,19 @@ from dataclasses import fields
 
 from runtime.token_saver.models import (
     CapabilityBand,
+    CredentialBinding,
     FingerprintEvidenceSource,
     LoadedConfig,
     MainLoop,
     Mode,
     ModelFingerprint,
     PreferenceProvenance,
+    PreflightReport,
     Preferences,
     Provenance,
     Role,
     Route,
+    Resolution,
     RunOverrides,
     Status,
     Transport,
@@ -44,6 +47,7 @@ def _route(
     band: CapabilityBand,
     transport: Transport = Transport.HOST_SUBAGENT,
     read_only: bool | None = None,
+    credential_env: tuple[CredentialBinding, ...] = (),
 ) -> Route:
     effective_read_only = role is Role.REVIEWER if read_only is None else read_only
     return Route(
@@ -54,7 +58,9 @@ def _route(
         read_only=effective_read_only,
         model=None if fingerprint is None else fingerprint.resolved_model_id,
         provider_family=None if fingerprint is None else fingerprint.provider_family,
+        variant=None if fingerprint is None else fingerprint.variant,
         command=("model-wrapper",) if transport is Transport.EXTERNAL_CLI else (),
+        credential_env=credential_env,
     )
 
 
@@ -102,6 +108,8 @@ def _probe(
     evidence: str | FingerprintEvidenceSource | None = None,
     read_only: bool = True,
     sandbox: WorkerSandboxIdentity | None = None,
+    expected_sandbox: WorkerSandboxIdentity | None = None,
+    configured_credentials: tuple[str, ...] = (),
     missing_credentials: tuple[str, ...] = (),
 ) -> RouteProbeResult:
     if evidence is None and fingerprint is not None:
@@ -118,8 +126,9 @@ def _probe(
         executable_available=route.transport is Transport.EXTERNAL_CLI,
         native_agent_available=route.transport is Transport.HOST_SUBAGENT,
         reviewer_read_only_enforced=read_only,
+        expected_worker_sandbox_identity=expected_sandbox,
         verified_worker_sandbox_identity=sandbox,
-        configured_credentials=("TEST_PROVIDER_TOKEN",),
+        configured_credentials=configured_credentials,
         missing_credentials=missing_credentials,
     )
 
@@ -157,6 +166,7 @@ class CanonicalIdentityTests(unittest.TestCase):
                 "executable_available",
                 "native_agent_available",
                 "reviewer_read_only_enforced",
+                "expected_worker_sandbox_identity",
                 "verified_worker_sandbox_identity",
                 "configured_credentials",
                 "missing_credentials",
@@ -225,6 +235,46 @@ class CanonicalIdentityTests(unittest.TestCase):
         )
         self.assertEqual(preflight.status, Status.REVIEWER_UNAVAILABLE)
         self.assertEqual(resolution.status, Status.REVIEWER_UNAVAILABLE)
+
+    def test_exact_pin_uses_canonical_case_rules_and_variant(self) -> None:
+        unicode_route = _route(
+            "unicode-reviewer",
+            ModelFingerprint("openai", "STRASSEAI", "high"),
+            role=Role.REVIEWER,
+            band=CapabilityBand.AUTHORITY,
+        )
+        _, unicode_preflight, _ = _resolve(
+            _main(TERRA, CapabilityBand.BALANCED),
+            _config((unicode_route,), mode=Mode.MAX, reviewers=(unicode_route.route_id,)),
+            {
+                unicode_route.route_id: _probe(
+                    unicode_route,
+                    ModelFingerprint("openai", "StraßeAI", "high"),
+                )
+            },
+        )
+        self.assertEqual(unicode_preflight.status, Status.REVIEWER_UNAVAILABLE)
+
+        sol_route = _route(
+            "sol-high",
+            SOL,
+            role=Role.REVIEWER,
+            band=CapabilityBand.AUTHORITY,
+            transport=Transport.EXTERNAL_CLI,
+        )
+        _, variant_preflight, variant_resolution = _resolve(
+            _main(TERRA, CapabilityBand.BALANCED),
+            _config((sol_route,), mode=Mode.MAX, reviewers=(sol_route.route_id,)),
+            {
+                sol_route.route_id: _probe(
+                    sol_route,
+                    ModelFingerprint("openai", "gpt-5.6-sol", "medium"),
+                    evidence=FingerprintEvidenceSource.PINNED_ADAPTER,
+                )
+            },
+        )
+        self.assertEqual(variant_preflight.status, Status.REVIEWER_UNAVAILABLE)
+        self.assertEqual(variant_resolution.status, Status.REVIEWER_UNAVAILABLE)
 
     def test_startup_fields_reject_line_break_injection(self) -> None:
         with self.assertRaisesRegex(ValueError, "control characters"):
@@ -499,6 +549,53 @@ class ModeResolutionTests(unittest.TestCase):
 
 
 class PreferenceAndWorkerTests(unittest.TestCase):
+    def test_probe_credentials_exactly_partition_route_bindings(self) -> None:
+        reviewer = _route(
+            "credential-reviewer",
+            SOL,
+            role=Role.REVIEWER,
+            band=CapabilityBand.AUTHORITY,
+            credential_env=(
+                CredentialBinding("CHILD_TOKEN", "REAL_SECRET_SOURCE"),
+            ),
+        )
+        config = _config((reviewer,), mode=Mode.MAX, reviewers=(reviewer.route_id,))
+
+        for configured, missing in (
+            (("UNRELATED_NAME",), ()),
+            ((), ()),
+            ((), ("REAL_SECRET_SOURCE",)),
+        ):
+            with self.subTest(configured=configured, missing=missing):
+                _, preflight, resolution = _resolve(
+                    _main(TERRA, CapabilityBand.BALANCED),
+                    config,
+                    {
+                        reviewer.route_id: _probe(
+                            reviewer,
+                            SOL,
+                            configured_credentials=configured,
+                            missing_credentials=missing,
+                        )
+                    },
+                )
+                self.assertEqual(preflight.status, Status.REVIEWER_UNAVAILABLE)
+                self.assertEqual(resolution.status, Status.REVIEWER_UNAVAILABLE)
+
+        _, exact_preflight, exact_resolution = _resolve(
+            _main(TERRA, CapabilityBand.BALANCED),
+            config,
+            {
+                reviewer.route_id: _probe(
+                    reviewer,
+                    SOL,
+                    configured_credentials=("REAL_SECRET_SOURCE",),
+                )
+            },
+        )
+        self.assertEqual(exact_preflight.status, Status.OK)
+        self.assertEqual(exact_resolution.status, Status.OK)
+
     def test_project_user_and_profile_reviewer_provenance_is_retained(self) -> None:
         for source in ("project", "user", "profile"):
             with self.subTest(source=source):
@@ -657,32 +754,52 @@ class PreferenceAndWorkerTests(unittest.TestCase):
             route_state_identity="2" * 64,
             profile_hash="3" * 64,
         )
-        candidate, preflight, resolution = _resolve(
-            _main(TERRA, CapabilityBand.BALANCED),
-            _config(
-                (reviewer, worker, other_worker),
-                mode=Mode.MAX,
-                reviewers=(reviewer.route_id,),
-                workers=(worker.route_id,),
-            ),
-            {
-                reviewer.route_id: _probe(reviewer, SOL),
-                worker.route_id: _probe(worker, KIMI_K3, sandbox=wrong_identity),
-            },
-        )
-
-        self.assertEqual(candidate.worker_route_ids, (worker.route_id,))
-        self.assertEqual(preflight.status, Status.OK)
-        self.assertIsNone(preflight.selected_worker_route_id)
-        self.assertEqual(preflight.selected_reviewer_route_id, reviewer.route_id)
-        self.assertEqual(resolution.worker, "main loop")
-
-        exact_identity = WorkerSandboxIdentity.issue(
+        expected_identity = WorkerSandboxIdentity.issue(
             route=worker,
             worktree_identity="4" * 64,
             route_state_identity="5" * 64,
             profile_hash="6" * 64,
         )
+        stale_identity = WorkerSandboxIdentity.issue(
+            route=worker,
+            worktree_identity="7" * 64,
+            route_state_identity="8" * 64,
+            profile_hash="9" * 64,
+        )
+        for label, invalid_identity in (
+            ("other-route", wrong_identity),
+            ("stale-worktree", stale_identity),
+        ):
+            with self.subTest(identity=label):
+                candidate, preflight, resolution = _resolve(
+                    _main(TERRA, CapabilityBand.BALANCED),
+                    _config(
+                        (reviewer, worker, other_worker),
+                        mode=Mode.MAX,
+                        reviewers=(reviewer.route_id,),
+                        workers=(worker.route_id,),
+                    ),
+                    {
+                        reviewer.route_id: _probe(reviewer, SOL),
+                        worker.route_id: _probe(
+                            worker,
+                            KIMI_K3,
+                            expected_sandbox=expected_identity,
+                            sandbox=invalid_identity,
+                        ),
+                    },
+                )
+
+                self.assertEqual(candidate.worker_route_ids, (worker.route_id,))
+                self.assertEqual(preflight.status, Status.OK)
+                self.assertIsNone(preflight.selected_worker_route_id)
+                self.assertEqual(
+                    preflight.selected_reviewer_route_id,
+                    reviewer.route_id,
+                )
+                self.assertEqual(resolution.worker, "main loop")
+
+        exact_identity = expected_identity
         with self.assertRaisesRegex(ValueError, "exact sandbox context"):
             WorkerSandboxIdentity(
                 route_id=exact_identity.route_id,
@@ -703,11 +820,59 @@ class PreferenceAndWorkerTests(unittest.TestCase):
             ),
             {
                 reviewer.route_id: _probe(reviewer, SOL),
-                worker.route_id: _probe(worker, KIMI_K3, sandbox=exact_identity),
+                worker.route_id: _probe(
+                    worker,
+                    KIMI_K3,
+                    expected_sandbox=expected_identity,
+                    sandbox=exact_identity,
+                ),
             },
         )
         self.assertEqual(exact_preflight.selected_worker_route_id, worker.route_id)
         self.assertEqual(exact_resolution.worker, worker.route_id)
+
+        with self.assertRaises(ValueError):
+            WorkerSandboxIdentity.issue(
+                route=worker,
+                worktree_identity=None,  # type: ignore[arg-type]
+                route_state_identity="5" * 64,
+                profile_hash="6" * 64,
+            )
+
+    def test_preflight_report_cannot_forge_candidate_partitions_or_routes(self) -> None:
+        reviewer = _route(
+            "sol-reviewer",
+            SOL,
+            role=Role.REVIEWER,
+            band=CapabilityBand.AUTHORITY,
+        )
+        candidate = resolve_candidates(
+            _main(TERRA, CapabilityBand.BALANCED),
+            _config((reviewer,), mode=Mode.MAX, reviewers=(reviewer.route_id,)),
+            RunOverrides(),
+        )
+        with self.assertRaisesRegex(ValueError, "candidate reviewer routes"):
+            PreflightReport(
+                candidate=candidate,
+                status=Status.OK,
+                resolved_mode=Mode.MAX,
+                selected_reviewer_route_id="not-configured",
+                eligible_reviewer_route_ids=("not-configured",),
+            )
+        with self.assertRaisesRegex(ValueError, "partition"):
+            PreflightReport(
+                candidate=candidate,
+                status=Status.REVIEWER_UNAVAILABLE,
+                resolved_mode=None,
+            )
+        with self.assertRaisesRegex(ValueError, "candidate reviewer route"):
+            Resolution(
+                status=Status.OK,
+                candidate=candidate,
+                mode=Mode.MAX,
+                authority_route_id="not-configured",
+                worker="main loop",
+            )
 
     def test_probe_mapping_key_must_match_embedded_route_id(self) -> None:
         reviewer = _route(

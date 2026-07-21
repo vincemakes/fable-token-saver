@@ -898,6 +898,32 @@ class BuiltInProfileTests(unittest.TestCase):
                     routes,
                 )
 
+    def test_builtin_pinned_routes_declare_canonical_variants(self) -> None:
+        expected = {
+            "anthropic": {
+                "fable": "default",
+                "opus": "default",
+                "sonnet": "default",
+                "haiku": "default",
+            },
+            "openai": {
+                "gpt-5.6-sol": "high",
+                "gpt-5.6-terra": "medium",
+                "gpt-5.6-luna": "default",
+            },
+            "kimi": {"kimi-k3": "default"},
+        }
+        for profile_name, variants in expected.items():
+            data = load_profile_data(profile_name)
+            with self.subTest(profile=profile_name):
+                self.assertEqual(
+                    {
+                        route_id: data["routes"][route_id]["variant"]
+                        for route_id in variants
+                    },
+                    variants,
+                )
+
     def test_kimi_authority_is_exact_and_unpinned_cli_is_only_a_custom_worker(self) -> None:
         data = load_profile_data("kimi")
         exact = data["capabilities"]["kimi-k3"]

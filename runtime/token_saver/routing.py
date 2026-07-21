@@ -142,14 +142,24 @@ def _transport_is_available(route: Route, probe: RouteProbeResult) -> bool:
     return probe.native_agent_available
 
 
+def _credential_partition_matches(route: Route, probe: RouteProbeResult) -> bool:
+    expected = {binding.source_name for binding in route.credential_env}
+    reported = set(probe.configured_credentials).union(probe.missing_credentials)
+    return reported == expected
+
+
 def _route_pin_matches(route: Route, fingerprint: ModelFingerprint) -> bool:
     if route.provider_family is None or route.model is None:
         return False
     return (
-        route.provider_family.strip().casefold()
-        == fingerprint.provider_family.strip().casefold()
-        and route.model.strip().casefold()
-        == fingerprint.resolved_model_id.strip().casefold()
+        route.provider_family.strip().lower()
+        == fingerprint.provider_family.strip().lower()
+        and route.model.strip().lower()
+        == fingerprint.resolved_model_id.strip().lower()
+        and (
+            route.variant is None
+            or route.variant.strip().lower() == fingerprint.variant.strip().lower()
+        )
     )
 
 
@@ -168,6 +178,8 @@ def _reviewer_eligibility(
     probe = probes.get(route_id)
     if probe is None:
         return False, f"reviewer route {route_id} has no preflight evidence"
+    if not _credential_partition_matches(route, probe):
+        return False, f"reviewer route {route_id} has malformed credential evidence"
     if not _transport_is_available(route, probe):
         return False, f"reviewer route {route_id} is unavailable"
     if not probe.reviewer_read_only_enforced:
@@ -184,6 +196,12 @@ def _reviewer_eligibility(
         FingerprintEvidenceSource.IDENTITY_HANDSHAKE,
     }:
         return False, f"reviewer route {route_id} has invalid external identity evidence"
+    if (
+        probe.fingerprint_evidence_source
+        is FingerprintEvidenceSource.PINNED_ADAPTER
+        and route.variant is None
+    ):
+        return False, f"reviewer route {route_id} lacks an exact pinned variant"
     if route.provider_family is None or route.model is None:
         return False, f"reviewer route {route_id} is not pinned to a canonical model"
     if not _route_pin_matches(route, fingerprint):
@@ -208,11 +226,20 @@ def _worker_eligibility(
     probe = probes.get(route_id)
     if probe is None:
         return False, f"worker route {route_id} has no preflight evidence"
+    if not _credential_partition_matches(route, probe):
+        return False, f"worker route {route_id} has malformed credential evidence"
     if not _transport_is_available(route, probe):
         return False, f"worker route {route_id} is unavailable"
     if route.transport is Transport.EXTERNAL_CLI:
+        expected_identity = probe.expected_worker_sandbox_identity
         sandbox_identity = probe.verified_worker_sandbox_identity
-        if sandbox_identity is None or not sandbox_identity.is_bound_to(route):
+        if (
+            expected_identity is None
+            or sandbox_identity is None
+            or sandbox_identity != expected_identity
+            or not expected_identity.is_bound_to(route)
+            or not sandbox_identity.is_bound_to(route)
+        ):
             return False, f"worker route {route_id} has no exact sandbox identity"
     return True, None
 
@@ -372,11 +399,10 @@ def finalize_resolution(
     if preflight_report.status is not Status.OK:
         return Resolution(
             status=preflight_report.status,
-            main=candidate.main,
+            candidate=candidate,
             mode=None,
             authority_route_id=None,
             worker="none",
-            resolution_source=candidate.resolution_source,
             facts=preflight_report.facts,
         )
 
@@ -397,10 +423,9 @@ def finalize_resolution(
 
     return Resolution(
         status=Status.OK,
-        main=candidate.main,
+        candidate=candidate,
         mode=mode,
         authority_route_id=authority_route_id,
         worker=worker,
-        resolution_source=candidate.resolution_source,
         facts=preflight_report.facts,
     )
