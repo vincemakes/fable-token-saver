@@ -84,6 +84,11 @@ _JWT_VALUE = re.compile(
 )
 _AWS_ACCESS_KEY = re.compile(r"^(?:AKIA|ASIA)[A-Z0-9]{16}$")
 _GOOGLE_API_KEY = re.compile(r"^AIza[A-Za-z0-9_-]{20,}$")
+_URL_USERINFO = re.compile(
+    r"^[A-Za-z][A-Za-z0-9+.-]*://[^/?#@\s:]+:[^/?#@\s]+@"
+)
+_SENSITIVE_VALUE_OPTIONS = {"--key", "--api-key", "--token", "--password"}
+_USERINFO_OPTIONS = {"--user", "-u"}
 
 
 class ConfigError(ValueError):
@@ -93,6 +98,10 @@ class ConfigError(ValueError):
         self.path = path
         self.reason = reason
         super().__init__(f"{path}: {reason}")
+
+
+class _DuplicateKeyError(ValueError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -183,6 +192,7 @@ def _looks_like_credential_value(value: str) -> bool:
         or _JWT_VALUE.fullmatch(stripped) is not None
         or _AWS_ACCESS_KEY.fullmatch(stripped) is not None
         or _GOOGLE_API_KEY.fullmatch(stripped) is not None
+        or _URL_USERINFO.match(stripped) is not None
     )
 
 
@@ -267,6 +277,15 @@ def _expect_mapping(value: object, path: str) -> Mapping[str, object]:
     return value  # type: ignore[return-value]
 
 
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise _DuplicateKeyError
+        result[key] = value
+    return result
+
+
 def _reject_unknown_fields(
     value: Mapping[str, object],
     allowed: set[str],
@@ -319,6 +338,7 @@ def _parse_credential_env(value: object, path: str) -> tuple[CredentialBinding, 
     if not isinstance(value, list):
         raise ConfigError(path, "must be an array of environment-name bindings")
     bindings: list[CredentialBinding] = []
+    child_names: set[str] = set()
     for index, raw_binding in enumerate(value):
         binding_path = f"{path}[{index}]"
         mapping = _expect_mapping(raw_binding, binding_path)
@@ -330,6 +350,13 @@ def _parse_credential_env(value: object, path: str) -> tuple[CredentialBinding, 
                     f"{binding_path}.{field_name}",
                     "must be an environment variable name",
                 )
+        child_name = mapping["child_name"]
+        if child_name in child_names:
+            raise ConfigError(
+                f"{binding_path}.child_name",
+                "must be unique within a route",
+            )
+        child_names.add(child_name)  # type: ignore[arg-type]
         bindings.append(
             CredentialBinding(
                 child_name=mapping["child_name"],  # type: ignore[arg-type]
@@ -337,6 +364,30 @@ def _parse_credential_env(value: object, path: str) -> tuple[CredentialBinding, 
             )
         )
     return tuple(bindings)
+
+
+def _validate_command_structure(command: list[str], path: str) -> None:
+    for index, member in enumerate(command):
+        option, separator, attached_value = member.partition("=")
+        normalized_option = option.lower()
+        if normalized_option in _SENSITIVE_VALUE_OPTIONS:
+            raise ConfigError(
+                f"{path}[{index}]",
+                "credential-bearing command options are not allowed",
+            )
+        if normalized_option in _USERINFO_OPTIONS:
+            candidate = attached_value if separator else None
+            candidate_index = index
+            if candidate is None and index + 1 < len(command):
+                candidate = command[index + 1]
+                candidate_index = index + 1
+            if candidate is not None:
+                username, colon, password = candidate.partition(":")
+                if colon and username and password:
+                    raise ConfigError(
+                        f"{path}[{candidate_index}]",
+                        "credential-bearing command options are not allowed",
+                    )
 
 
 def _parse_route(route_id: str, value: object) -> Route:
@@ -399,15 +450,23 @@ def _parse_route(route_id: str, value: object) -> Route:
             raise ConfigError(f"{path}.{field_name}", "must be a non-empty string or null")
         text_fields[field_name] = candidate
 
+    command_present = "command" in mapping
     raw_command = mapping.get("command", [])
     if not isinstance(raw_command, list) or not all(
         isinstance(member, str) for member in raw_command
     ):
         raise ConfigError(f"{path}.command", "must be a JSON string argument array")
+    for index, member in enumerate(raw_command):
+        if "\0" in member:
+            raise ConfigError(
+                f"{path}.command[{index}]",
+                "must not contain NUL",
+            )
+    _validate_command_structure(raw_command, f"{path}.command")
     if transport is Transport.EXTERNAL_CLI:
         if not raw_command or not raw_command[0].strip():
             raise ConfigError(f"{path}.command", "must contain a non-empty executable")
-    elif raw_command:
+    elif command_present:
         raise ConfigError(f"{path}.command", "is only valid for external-cli routes")
 
     timeout_seconds = mapping.get("timeout_seconds", 600)
@@ -606,13 +665,18 @@ def discover_user_config_path(
     else:
         source = os.environ if environ is None else environ
         xdg_root = source.get("XDG_CONFIG_HOME")
-        if xdg_root:
-            root = Path(xdg_root)
+        xdg_path = Path(xdg_root) if isinstance(xdg_root, str) and xdg_root else None
+        if xdg_path is not None and xdg_path.is_absolute():
+            root = xdg_path
         else:
             home = source.get("HOME")
-            if not home:
-                raise ConfigError("environment.HOME", "is required when XDG_CONFIG_HOME is unset")
-            root = Path(home) / ".config"
+            home_path = Path(home) if isinstance(home, str) and home else None
+            if home_path is None or not home_path.is_absolute():
+                raise ConfigError(
+                    "environment.config_root",
+                    "requires an absolute XDG_CONFIG_HOME or HOME",
+                )
+            root = home_path / ".config"
     return root / "token-saver" / "config.json"
 
 
@@ -626,7 +690,12 @@ def _read_json_file(path: Path, source: str) -> dict[str, object]:
     except (OSError, UnicodeError):
         raise ConfigError(source, "configuration file could not be read") from None
     try:
-        value = json.loads(text)
+        value = json.loads(text, object_pairs_hook=_unique_json_object)
+    except _DuplicateKeyError:
+        raise ConfigError(
+            f"{source}.<duplicate>",
+            "duplicate object keys are not allowed",
+        ) from None
     except (json.JSONDecodeError, UnicodeError):
         raise ConfigError(source, "configuration file is not valid JSON") from None
     mapping = _expect_mapping(value, source)

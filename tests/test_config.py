@@ -18,9 +18,13 @@ from runtime.token_saver.config import (
 from runtime.token_saver.models import (
     CapabilityBand,
     CredentialBinding,
+    LoadedConfig,
     MainLoop,
     Mode,
     ModelFingerprint,
+    PreferenceProvenance,
+    Preferences,
+    Provenance,
     RetryPolicy,
     Role,
     Route,
@@ -179,6 +183,67 @@ class ModelContractTests(unittest.TestCase):
         self.assertIsInstance(route.roles, frozenset)
         self.assertEqual(route.roles, frozenset({Role.SCOUT, Role.MECHANIC}))
 
+    def test_route_rejects_duplicate_credential_child_names(self) -> None:
+        duplicates = (
+            (
+                CredentialBinding("CHILD_KEY", "SOURCE_ONE"),
+                CredentialBinding("CHILD_KEY", "SOURCE_ONE"),
+            ),
+            (
+                CredentialBinding("CHILD_KEY", "SOURCE_ONE"),
+                CredentialBinding("CHILD_KEY", "SOURCE_TWO"),
+            ),
+        )
+        for credential_env in duplicates:
+            with self.subTest(sources=tuple(b.source_name for b in credential_env)):
+                with self.assertRaisesRegex(ValueError, "child_name"):
+                    Route(
+                        route_id="worker",
+                        transport=Transport.HOST_SUBAGENT,
+                        band=CapabilityBand.BALANCED,
+                        roles=frozenset({Role.WORKER}),
+                        read_only=False,
+                        credential_env=credential_env,
+                    )
+
+    def test_route_rejects_nul_in_every_command_element(self) -> None:
+        for command in (("worker\0bin",), ("worker-bin", "bad\0argument")):
+            with self.subTest(command_index=0 if "\0" in command[0] else 1):
+                with self.assertRaisesRegex(ValueError, "command"):
+                    Route(
+                        route_id="worker",
+                        transport=Transport.EXTERNAL_CLI,
+                        band=CapabilityBand.BALANCED,
+                        roles=frozenset({Role.WORKER}),
+                        read_only=False,
+                        command=command,
+                    )
+
+    def test_loaded_config_requires_route_map_keys_to_match_route_ids(self) -> None:
+        route = Route(
+            route_id="worker",
+            transport=Transport.HOST_SUBAGENT,
+            band=CapabilityBand.BALANCED,
+            roles=frozenset({Role.WORKER}),
+            read_only=False,
+        )
+        provenance = Provenance("profile")
+        preference_provenance = PreferenceProvenance(
+            reviewers=provenance,
+            workers=provenance,
+            scouts=provenance,
+            mechanics=provenance,
+        )
+        with self.assertRaisesRegex(ValueError, "route identifiers"):
+            LoadedConfig(
+                mode=Mode.AUTO,
+                routes={"mismatched-alias": route},
+                preferences=Preferences(),
+                mode_provenance=provenance,
+                route_provenance={"mismatched-alias": provenance},
+                preference_provenance=preference_provenance,
+            )
+
 
 class ConfigValidationTests(unittest.TestCase):
     def assert_config_error_redacts(
@@ -314,6 +379,35 @@ class ConfigValidationTests(unittest.TestCase):
                 )
                 self.assertIn("credential", str(error).lower())
 
+    def test_external_command_rejects_structural_credentials_and_userinfo(self) -> None:
+        secret = "structural-never-echo-password"
+        commands = (
+            ["worker-bin", "--key", secret],
+            ["worker-bin", "--api-key", secret],
+            ["worker-bin", "--token", secret],
+            ["worker-bin", "--password", secret],
+            ["worker-bin", "--user", f"user:{secret}"],
+            ["worker-bin", "-u", f"user:{secret}"],
+            ["worker-bin", f"https://user:{secret}@example.test/path"],
+        )
+        for index, command in enumerate(commands):
+            profile = _base_profile()
+            profile["routes"]["worker"] = {
+                "transport": "external-cli",
+                "band": "balanced",
+                "roles": ["worker"],
+                "read_only": False,
+                "command": command,
+            }
+            with self.subTest(command_index=index):
+                error = self.assert_config_error_redacts(
+                    lambda profile=profile: load_config_layers(profile=profile),
+                    secret,
+                    f"user:{secret}",
+                    f"https://user:{secret}@example.test/path",
+                )
+                self.assertIn("credential", str(error).lower())
+
     def test_credential_detection_does_not_reject_benign_similar_words(self) -> None:
         profile = _base_profile()
         profile["routes"]["worker"] = {
@@ -331,6 +425,12 @@ class ConfigValidationTests(unittest.TestCase):
                 "--env=OPENAI_API_KEYSTONE=value",
                 "--header=X-API-Keynote: chapter",
                 "--header=Authorization-Mode: basic",
+                "--keyboard",
+                "--user",
+                "alice",
+                "-u",
+                "alice",
+                "https://example.test/path",
             ],
         }
         loaded = load_config_layers(profile=profile)
@@ -370,6 +470,74 @@ class ConfigValidationTests(unittest.TestCase):
                     name,
                 )
                 self.assertIn(f"routes.<route>.credential_env[0].{field}", str(error))
+
+    def test_config_rejects_duplicate_credential_child_names(self) -> None:
+        for sources in (("SOURCE_ONE", "SOURCE_ONE"), ("SOURCE_ONE", "SOURCE_TWO")):
+            profile = _base_profile()
+            profile["routes"]["worker"]["credential_env"] = [  # type: ignore[index]
+                {"child_name": "CHILD_KEY", "source_name": sources[0]},
+                {"child_name": "CHILD_KEY", "source_name": sources[1]},
+            ]
+            with self.subTest(sources=sources):
+                with self.assertRaisesRegex(
+                    ConfigError,
+                    r"routes\.<route>\.credential_env\[1\]\.child_name",
+                ):
+                    load_config_layers(profile=profile)
+
+    def test_config_rejects_nul_in_every_command_element(self) -> None:
+        for command in (["worker\0bin"], ["worker-bin", "bad\0argument"]):
+            profile = _base_profile()
+            profile["routes"]["worker"] = {
+                "transport": "external-cli",
+                "band": "balanced",
+                "roles": ["worker"],
+                "read_only": False,
+                "command": command,
+            }
+            nul_index = 0 if "\0" in command[0] else 1
+            with self.subTest(command_index=nul_index):
+                error = self.assert_config_error_redacts(
+                    lambda profile=profile: load_config_layers(profile=profile),
+                    command[nul_index],
+                )
+                self.assertIn(f"command[{nul_index}]", error.path)
+
+    def test_host_route_rejects_command_property_even_when_empty(self) -> None:
+        profile = _base_profile()
+        profile["routes"]["worker"]["command"] = []  # type: ignore[index]
+        with self.assertRaisesRegex(ConfigError, r"routes\.<route>\.command"):
+            load_config_layers(profile=profile)
+
+    def test_nested_duplicate_json_keys_are_rejected_before_shadowing(self) -> None:
+        secret = "duplicate-shadow-never-echo"
+        safe_command = "duplicate-safe-executable"
+        raw_profile = f"""{{
+          "schema_version": 1,
+          "mode": "auto",
+          "routes": {{
+            "worker": {{
+              "transport": "external-cli",
+              "band": "balanced",
+              "roles": ["worker"],
+              "read_only": false,
+              "command": ["credential-command", "--api-key", "{secret}"],
+              "command": ["{safe_command}"]
+            }}
+          }},
+          "preferences": {{"workers": ["worker"]}}
+        }}"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "duplicate.json"
+            path.write_text(raw_profile, encoding="utf-8")
+            error = self.assert_config_error_redacts(
+                lambda: load_config(path, discover=False),
+                secret,
+                safe_command,
+                "credential-command",
+            )
+        self.assertIn("duplicate", str(error).lower())
+        self.assertIsNone(error.__cause__)
 
     def test_rejects_credential_like_keys_and_values_recursively(self) -> None:
         secret = "never-echo-this-secret-material"
@@ -584,6 +752,28 @@ class ConfigDiscoveryTests(unittest.TestCase):
         )
         self.assertEqual(os.environ.get("HOME"), process_home)
 
+    def test_relative_xdg_root_falls_back_to_absolute_home(self) -> None:
+        self.assertEqual(
+            discover_user_config_path(
+                {"XDG_CONFIG_HOME": "relative/xdg", "HOME": "/absolute/home"}
+            ),
+            Path("/absolute/home/.config/token-saver/config.json"),
+        )
+
+    def test_discovery_rejects_relative_or_missing_environment_roots(self) -> None:
+        invalid_environments = (
+            {"XDG_CONFIG_HOME": "relative/xdg", "HOME": "relative/home"},
+            {"XDG_CONFIG_HOME": "relative/xdg"},
+        )
+        for environ in invalid_environments:
+            with self.subTest(environ=tuple(environ)):
+                with self.assertRaises(ConfigError) as raised:
+                    discover_user_config_path(environ)
+                message = str(raised.exception)
+                for value in environ.values():
+                    self.assertNotIn(value, message)
+                self.assertIsNone(raised.exception.__cause__)
+
     def test_project_path_is_root_dot_token_saver_json(self) -> None:
         self.assertEqual(
             discover_project_config_path(Path("/work/repository")),
@@ -647,11 +837,15 @@ class BuiltInProfileTests(unittest.TestCase):
                 "gpt-5.6-terra": "balanced",
                 "gpt-5.6-luna": "fast",
             },
-            "kimi": {"kimi-k3": "authority"},
+            "kimi": {
+                "kimi-k3": "authority",
+                "claude-kimi": "balanced",
+            },
         }
         for profile_name, routes in expected.items():
             data = load_profile_data(profile_name)
             with self.subTest(profile=profile_name):
+                self.assertEqual(set(data["routes"]), set(routes))
                 self.assertEqual(
                     {route_id: data["routes"][route_id]["band"] for route_id in routes},
                     routes,

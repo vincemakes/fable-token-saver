@@ -170,6 +170,8 @@ class Route:
         ):
             raise ValueError("command must be an argument array")
         command = tuple(self.command)
+        if any("\0" in member for member in command):
+            raise ValueError("command elements must not contain NUL")
         if transport is Transport.EXTERNAL_CLI:
             if not command or not command[0].strip():
                 raise ValueError("external-cli command requires an executable")
@@ -188,12 +190,16 @@ class Route:
             isinstance(binding, CredentialBinding) for binding in self.credential_env
         ):
             raise ValueError("credential_env must contain CredentialBinding entries")
+        credential_env = tuple(self.credential_env)
+        child_names = tuple(binding.child_name for binding in credential_env)
+        if len(set(child_names)) != len(child_names):
+            raise ValueError("credential_env child_name values must be unique")
 
         object.__setattr__(self, "transport", transport)
         object.__setattr__(self, "band", band)
         object.__setattr__(self, "roles", roles)
         object.__setattr__(self, "command", command)
-        object.__setattr__(self, "credential_env", tuple(self.credential_env))
+        object.__setattr__(self, "credential_env", credential_env)
 
 
 @dataclass(frozen=True)
@@ -302,6 +308,8 @@ class LoadedConfig:
             for route_id, route in routes.items()
         ):
             raise ValueError("routes must map identifiers to Route values")
+        if any(route_id != route.route_id for route_id, route in routes.items()):
+            raise ValueError("route identifiers must match their mapping keys")
         if set(routes) != set(provenance) or not all(
             isinstance(value, Provenance) for value in provenance.values()
         ):
