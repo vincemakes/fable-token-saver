@@ -1,4 +1,9 @@
-# 开发笔记(v0.1.0 交接存档)
+# 开发笔记(v0.1.0 重命名前存档)
+
+> **重命名前存档 / pre-rename archive:** 本文保留 2026-07 的原始
+> `fable-token-saver` 路径、命令和模型叙事,仅用于复现实验,不是 Token Saver v2
+> 的现行操作文档。当前仓库是
+> <https://github.com/vincemakes/token-saver>。
 
 > 本项目从 idea 到发布在一个 Claude Code session 内完成(2026-07-02 ~ 07-03,Fable 5 主循环)。
 > 本文是该 session 的知识存档:目录地图、复现方法、实测结论、踩坑记录、后续方向。
@@ -7,8 +12,8 @@
 
 | 位置 | 内容 |
 |---|---|
-| `~/Desktop/devv/fable-token-saver` | 本仓库(开发工作区,push 源头) |
-| `~/.claude/skills/fable-token-saver` | 本地安装 = 本仓库的 git clone,`git pull` 更新 |
+| `~/Desktop/devv/fable-token-saver` | 历史评测工作区路径(不是现行仓库安装说明) |
+| `~/.claude/skills/fable-token-saver` | 历史 v0.1.0 本地安装路径,仅用于复现旧运行 |
 | `~/.claude/skills/fable-token-saver-workspace/` | **评测数据全在这(不在 git 里,删 session 不影响)**:iteration-1(小任务×3×2)、iteration-2(大任务×2)、iteration-3(max 档 opus/sonnet)、iteration-4(埋雷调试赛)、各 run-iteration-*.sh、fixture-template、grade_mechanical.py 等 |
 | `benchmarks/`(本仓库) | benchmark.json/md、触发评测集、`bughunt/`(埋雷源码 + 盲测试,可复现) |
 
@@ -47,5 +52,6 @@
 
 ## 发布信息
 
-- 仓库:https://github.com/vincemakes/fable-token-saver(main,MIT)
+- 当前仓库:https://github.com/vincemakes/token-saver(main,MIT)
+- 历史 v0.1.0 仓库标识:`vincemakes/fable-token-saver`(只用于存档引用)
 - Release v0.1.0 带 `.skill` 安装包;Social preview 已设(`media/og.png`,1280×640)

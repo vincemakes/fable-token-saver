@@ -1,6 +1,6 @@
 {
-  "skill_name": "fable-token-saver",
-  "note": "Each eval runs twice (with skill / without skill) as independent headless `claude -p` sessions in fresh copies of the fixture repo. See README Benchmarks for methodology and results.",
+  "skill_name": "token-saver",
+  "note": "Each eval runs twice (with token-saver / without token-saver) as independent headless `claude -p` sessions in fresh copies of the fixture repo. See README Benchmarks for methodology and results.",
   "evals": [
     {
       "id": 1,
