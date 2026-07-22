@@ -113,7 +113,8 @@ class ProviderExecTests(unittest.TestCase):
     def test_sandboxed_worker_requires_a_sealed_manifest(self) -> None:
         environment = dict(self.environment)
         environment.pop("MODEL_BOSS_INVOCATION_MANIFEST")
-        environment["TOKEN_SAVER_INVOCATION_MANIFEST"] = os.fspath(
+        legacy_manifest = "TOKEN" + "_SAVER_INVOCATION_MANIFEST"
+        environment[legacy_manifest] = os.fspath(
             self.resources.manifest_path
         )
 

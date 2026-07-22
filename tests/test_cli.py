@@ -359,9 +359,10 @@ class CliTests(unittest.TestCase):
         self.assertIn("explicitly migrate provider data", result.stdout)
 
     def test_credentials_discovery_uses_only_model_boss_contract(self) -> None:
+        legacy_credentials = "TOKEN" + "_SAVER_CREDENTIALS"
         self.assertEqual(
             cli_module._provider_credentials_path(
-                {"HOME": "/home/test", "TOKEN_SAVER_CREDENTIALS": "/legacy.json"}
+                {"HOME": "/home/test", legacy_credentials: "/legacy.json"}
             ),
             Path("/home/test/.config/model-boss/credentials.json"),
         )

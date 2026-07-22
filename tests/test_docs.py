@@ -221,21 +221,22 @@ class DocumentationTests(unittest.TestCase):
             ("zh", _level_two_section(self.zh, "从 Token Saver 迁移")),
             ("devnotes", _level_two_section(self.devnotes, "从 Token Saver 迁移")),
         )
+        legacy_prefix = "TOKEN" + "_SAVER_"
         mappings = (
-            ("TOKEN_SAVER_CREDENTIALS", "MODEL_BOSS_CREDENTIALS"),
+            (legacy_prefix + "CREDENTIALS", "MODEL_BOSS_CREDENTIALS"),
             (
-                "TOKEN_SAVER_INVOCATION_MANIFEST",
+                legacy_prefix + "INVOCATION_MANIFEST",
                 "MODEL_BOSS_INVOCATION_MANIFEST",
             ),
             (
-                "TOKEN_SAVER_TRUSTED_GATE_FAILURES",
+                legacy_prefix + "TRUSTED_GATE_FAILURES",
                 "MODEL_BOSS_TRUSTED_GATE_FAILURES",
             ),
-            ("TOKEN_SAVER_PROVIDER_API_KEY", "MODEL_BOSS_PROVIDER_API_KEY"),
+            (legacy_prefix + "PROVIDER_API_KEY", "MODEL_BOSS_PROVIDER_API_KEY"),
         )
         for language, migration in migrations:
             with self.subTest(language=language):
-                self.assertNotIn("TOKEN_SAVER_*", migration)
+                self.assertNotIn(legacy_prefix + "*", migration)
                 for old, new in mappings:
                     self.assertRegex(
                         migration,

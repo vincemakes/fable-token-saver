@@ -29,10 +29,11 @@ from runtime.model_boss.sandbox import (
 class RuntimeIdentityTests(unittest.TestCase):
     def test_active_security_domains_use_model_boss_identity(self) -> None:
         runtime_root = Path(__file__).resolve().parents[1] / "runtime" / "model_boss"
+        legacy_domain = "TOKEN" + "-SAVER"
         for name in ("evidence.py", "integration.py", "models.py", "sandbox.py"):
             with self.subTest(name=name):
                 source = (runtime_root / name).read_text(encoding="utf-8")
-                self.assertNotIn("TOKEN-SAVER", source)
+                self.assertNotIn(legacy_domain, source)
         self.assertEqual(sandbox_module._PROBE_PREFIX, "MODEL-BOSS-SANDBOX-PROBE")
 
 

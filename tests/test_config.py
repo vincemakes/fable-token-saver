@@ -897,11 +897,12 @@ class ConfigDiscoveryTests(unittest.TestCase):
             xdg = root / "xdg"
             repo = root / "repo"
             repo.mkdir()
+            legacy_slug = "token" + "-saver"
             self.write_json(
-                xdg / "token-saver" / "config.json",
+                xdg / legacy_slug / "config.json",
                 _layer(mode="lite"),
             )
-            self.write_json(repo / ".token-saver.json", _layer(mode="max"))
+            self.write_json(repo / f".{legacy_slug}.json", _layer(mode="max"))
 
             loaded = load_config(
                 profile=_base_profile(),

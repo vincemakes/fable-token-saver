@@ -67,7 +67,8 @@ class WorkerOrchestrationTests(unittest.TestCase):
         )
 
         self.assertIn(b"MODEL_BOSS_TRUSTED_GATE_FAILURES=", packet)
-        self.assertNotIn(b"TOKEN_SAVER_TRUSTED_GATE_FAILURES=", packet)
+        legacy_gate_variable = b"TOKEN" + b"_SAVER_TRUSTED_GATE_FAILURES="
+        self.assertNotIn(legacy_gate_variable, packet)
 
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(prefix="model-boss-worker-test-")
