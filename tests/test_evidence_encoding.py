@@ -447,6 +447,7 @@ class StrictValidationTests(unittest.TestCase):
             b"dir//file",
             b"dir/",
             b".git/config",
+            b".GIT/config",
             b"C:/absolute",
             b"nul\x00byte",
         )

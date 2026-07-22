@@ -127,7 +127,9 @@ def _require_git_path(value: object) -> bytes:
     ):
         raise ValueError("raw Git path must be repository-relative")
     components = path.split(b"/")
-    if any(component in {b"", b".", b"..", b".git"} for component in components):
+    if any(component in {b"", b".", b".."} for component in components) or any(
+        component.lower() == b".git" for component in components
+    ):
         raise ValueError("raw Git path contains a noncanonical component")
     return path
 
