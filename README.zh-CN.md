@@ -261,51 +261,67 @@ PowerShell 中，绝对的 `$env:XDG_CONFIG_HOME` 优先；否则运行时先读
 | GLM implementer | — | `claude-glm-bypass -p` |
 | GLM fast scout/mechanic | `claude-glm-turbo` | `claude-glm-turbo-bypass -p` |
 
-主循环随后可用一次密封调用完成外部实现：
+先找到已安装的 `SKILL.md` 所在目录，并把它记为
+`<model-boss-skill-root>`。目标仓库本身不需要包含 Model Boss。
+
+密封 Max 工作流的顺序固定如下。计划与最终评审必须使用同一个 Reviewer route、实际
+fingerprint、只读证明和主循环 fingerprint：
 
 ```bash
 mkdir -p "$PWD/../model-boss-runs"
-python3 scripts/model-boss.py worker \
+python3 <model-boss-skill-root>/scripts/model-boss.py plan-review \
+  --repo "$PWD" \
+  --temp-parent "$PWD/../model-boss-runs" \
+  --task /absolute/path/to/task.json \
+  --context /absolute/path/to/plan-context.json \
+  --profile /absolute/path/to/profile.json \
+  --route <reviewer-route> \
+  --main-fingerprint <provider:model:variant>
+
+python3 <model-boss-skill-root>/scripts/model-boss.py worker --manifest <manifest> \
+  --repo "$PWD" \
+  --temp-parent "$PWD/../model-boss-runs" \
+  --route claude-kimi-bypass \
+  --task /absolute/path/to/task.json \
+  --mode max
+
+python3 <model-boss-skill-root>/scripts/model-boss.py review \
+  --profile /absolute/path/to/same-profile.json \
+  --route <same-reviewer-route> \
+  --main-fingerprint <same-provider:model:variant> \
+  --manifest <manifest> \
+  --context /absolute/path/to/review-context.json
+
+python3 <model-boss-skill-root>/scripts/model-boss.py integrate <manifest>
+```
+
+Max 的 plan context 精确包含 `version`、`goal`、`proposed_plan`、
+`acceptance_criteria` 和 `risks`。最终 context 必须重复已批准的 goal、plan 和验收
+标准，只额外加入最终阶段专用的 `main_loop_verdict`。task、源码、计划或 Reviewer
+任一发生变化都会阻止派发或审批。
+
+Lite 在主循环内完成计划裁决。外部 Worker 自己创建 invocation，因此拒绝
+`--manifest`：
+
+```bash
+python3 <model-boss-skill-root>/scripts/model-boss.py worker \
   --repo "$PWD" \
   --temp-parent "$PWD/../model-boss-runs" \
   --route claude-kimi-bypass \
   --task /absolute/path/to/task.json \
   --mode lite
-```
 
-该命令会创建并物化一次性 worktree、重建 manifest、重新探测沙箱，并且只在探测
-成功后注入 bypass 权限；随后运行 Worker 与 gates，再密封 delta。它不会自动集成。
-已经选定的主循环负责思考与最终评审、次级 Worker 负责实现时使用 `--mode lite`。
-较低一级模型作为主循环、另一个更高级且 fingerprint 不同的外部 Reviewer 负责权威
-裁决时使用 `--mode max`；Max 仍可把实现交给更低一级 Worker。同一 manifest 的模式
-不可改变；需要改变拓扑时必须新建 Worker 调用。
-
-主循环检查完整证据并写好严格的 review context JSON 后，执行与密封模式匹配的评审。
-Lite 由继承的主循环 inline 裁决：
-
-```bash
-python3 scripts/model-boss.py review --inline \
+python3 <model-boss-skill-root>/scripts/model-boss.py review --inline \
   --main-fingerprint <provider:model:variant> \
   --manifest <manifest> \
   --context /absolute/path/to/review-context.json
+
+python3 <model-boss-skill-root>/scripts/model-boss.py integrate <manifest>
 ```
 
-Max 使用 profile 与 route 指定的外部 Reviewer；此时 `--inline` 无效：
-
-```bash
-python3 scripts/model-boss.py review --profile /absolute/path/to/profile.json \
-  --route <reviewer-route> \
-  --main-fingerprint <provider:model:variant> \
-  --manifest <manifest> \
-  --context /absolute/path/to/review-context.json
-```
-
-评审通过后，运行时会写入绑定三哈希和本次 invocation 的最终评审 receipt。integrate
-通过 manifest 读取这份密封 receipt，不再接受调用者另传 approval 文件：
-
-```bash
-python3 scripts/model-boss.py integrate <manifest>
-```
+Worker 会创建一次性 worktree、重新探测沙箱、执行声明的 gates，并在不改动源仓库的
+前提下密封 delta。最终评审通过后写入 invocation-bound receipt；集成只接受 manifest，
+不接受调用者另传 approval 文件。
 
 精确 task 与 review context schema 见
 [外部 CLI 安全合同](references/adapters/external-cli.md)。不要在普通仓库里直接运行
@@ -365,7 +381,7 @@ Web 与 MCP 工具不可用。task 声明的 gate 命令使用直接参数数组
 迁移是显式且 no-overwrite 的。正常自动发现会忽略所有旧路径与旧环境变量。`--legacy-source` 必须显式提供才会导入；默认旧文件不会导入（wrapper-only setup 只安装 wrappers）。唯一标准的旧 Provider 导入命令是：
 
 ```bash
-python3 scripts/model-boss.py setup-providers --legacy-source <absolute-old-providers.env>
+python3 <model-boss-skill-root>/scripts/model-boss.py setup-providers --legacy-source <absolute-old-providers.env>
 ```
 
 该命令只会把指定的旧 `$HOME/.claude/fable-token-saver/providers.env` 格式文件当作数据解析，绝不会当作 shell 代码。`scripts/setup-model-providers.sh` 只是这条标准命令的 wrapper。迁移绝不删除或编辑旧数据。

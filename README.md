@@ -258,54 +258,68 @@ The exact wrapper role mapping is:
 | GLM implementer | — | `claude-glm-bypass -p` |
 | GLM fast scout/mechanic | `claude-glm-turbo` | `claude-glm-turbo-bypass -p` |
 
-The main loop can then run an external implementation as one sealed operation:
+Resolve the directory containing the installed `SKILL.md` and call it
+`<model-boss-skill-root>`. The target repository does not need to contain Model Boss.
+
+The sealed Max workflow has one exact order. Plan and final review must use the same
+reviewer route, resolved fingerprint, read-only proof, and main-loop fingerprint:
 
 ```bash
 mkdir -p "$PWD/../model-boss-runs"
-python3 scripts/model-boss.py worker \
+python3 <model-boss-skill-root>/scripts/model-boss.py plan-review \
+  --repo "$PWD" \
+  --temp-parent "$PWD/../model-boss-runs" \
+  --task /absolute/path/to/task.json \
+  --context /absolute/path/to/plan-context.json \
+  --profile /absolute/path/to/profile.json \
+  --route <reviewer-route> \
+  --main-fingerprint <provider:model:variant>
+
+python3 <model-boss-skill-root>/scripts/model-boss.py worker --manifest <manifest> \
+  --repo "$PWD" \
+  --temp-parent "$PWD/../model-boss-runs" \
+  --route claude-kimi-bypass \
+  --task /absolute/path/to/task.json \
+  --mode max
+
+python3 <model-boss-skill-root>/scripts/model-boss.py review \
+  --profile /absolute/path/to/same-profile.json \
+  --route <same-reviewer-route> \
+  --main-fingerprint <same-provider:model:variant> \
+  --manifest <manifest> \
+  --context /absolute/path/to/review-context.json
+
+python3 <model-boss-skill-root>/scripts/model-boss.py integrate <manifest>
+```
+
+The Max plan context contains exactly `version`, `goal`, `proposed_plan`,
+`acceptance_criteria`, and `risks`. The final context must repeat that approved goal,
+plan, and criteria, plus its final-only `main_loop_verdict`. Any task, source, plan, or
+reviewer change blocks dispatch or approval.
+
+Lite performs plan authority inline. Its external worker creates the invocation and
+therefore rejects `--manifest`:
+
+```bash
+python3 <model-boss-skill-root>/scripts/model-boss.py worker \
   --repo "$PWD" \
   --temp-parent "$PWD/../model-boss-runs" \
   --route claude-kimi-bypass \
   --task /absolute/path/to/task.json \
   --mode lite
-```
 
-The command creates and materializes the disposable worktree, reconstructs the
-manifest, injects bypass permission only after a fresh sandbox probe, runs the worker
-and gates, and seals the delta. It does not integrate. Use `--mode lite` when the
-already-selected main loop owns reasoning and final review and the secondary worker
-implements. Use `--mode max` when that main loop may be a lower tier and a distinct,
-higher-authority external reviewer owns the authority decision; Max may still send
-implementation to an even lower worker. The selected mode is immutable for that
-manifest, so changing topology means starting a new worker invocation.
-
-After the main loop has reviewed the complete evidence and written a strict review
-context JSON, seal the matching review. Lite uses the inherited main loop inline:
-
-```bash
-python3 scripts/model-boss.py review --inline \
+python3 <model-boss-skill-root>/scripts/model-boss.py review --inline \
   --main-fingerprint <provider:model:variant> \
   --manifest <manifest> \
   --context /absolute/path/to/review-context.json
+
+python3 <model-boss-skill-root>/scripts/model-boss.py integrate <manifest>
 ```
 
-Max uses an external reviewer configured by profile and route; `--inline` is invalid:
-
-```bash
-python3 scripts/model-boss.py review --profile /absolute/path/to/profile.json \
-  --route <reviewer-route> \
-  --main-fingerprint <provider:model:variant> \
-  --manifest <manifest> \
-  --context /absolute/path/to/review-context.json
-```
-
-An approving review writes an invocation-bound, three-hash final-review receipt.
-Integration reads that sealed receipt through the manifest; it no longer accepts a
-caller-supplied approval file:
-
-```bash
-python3 scripts/model-boss.py integrate <manifest>
-```
+The worker creates a disposable worktree, reruns the sandbox probe, executes the
+declared gates, and seals the delta without changing the source repository. An
+approving final review writes an invocation-bound receipt; integration accepts only
+the manifest and never a caller-supplied approval file.
 
 See the [external CLI contract](references/adapters/external-cli.md) for the exact task
 and review-context schemas. Do not run a bypass alias directly from an ordinary
@@ -375,7 +389,7 @@ Stepping aside leaves the inherited main loop in charge. It does not switch mode
 Migration is explicit and no-overwrite. Normal discovery ignores all former paths and old variables. An explicit --legacy-source is required for any legacy import; the default legacy file is not imported by wrapper-only setup. The only canonical legacy-provider import is:
 
 ```bash
-python3 scripts/model-boss.py setup-providers --legacy-source <absolute-old-providers.env>
+python3 <model-boss-skill-root>/scripts/model-boss.py setup-providers --legacy-source <absolute-old-providers.env>
 ```
 
 That command parses the named legacy `$HOME/.claude/fable-token-saver/providers.env`-format file as data—never as shell code. `scripts/setup-model-providers.sh` is only a wrapper around the canonical command. Migration never deletes or edits legacy data.

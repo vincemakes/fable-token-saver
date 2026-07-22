@@ -135,6 +135,29 @@ class DocumentationTests(unittest.TestCase):
                 for pattern in positioning_patterns[language]:
                     self.assertRegex(opening, pattern)
 
+    def test_public_cli_workflow_uses_installed_skill_root_and_max_plan_order(self) -> None:
+        for language, text in (("en", self.en), ("zh", self.zh)):
+            with self.subTest(language=language):
+                self.assertNotIn("python3 scripts/model-boss.py", text)
+                self.assertIn(
+                    "python3 <model-boss-skill-root>/scripts/model-boss.py",
+                    text,
+                )
+                if language == "en":
+                    self.assertIn("directory containing", text.lower())
+                else:
+                    self.assertRegex(text, r"`SKILL\.md`\s*所在目录")
+                normalized = " ".join(text.lower().split())
+                plan_index = normalized.index("plan-review")
+                worker_index = normalized.index("worker --manifest", plan_index)
+                review_index = normalized.index("model-boss.py review", worker_index)
+                integrate_index = normalized.index("model-boss.py integrate", review_index)
+                self.assertLess(plan_index, worker_index)
+                self.assertLess(worker_index, review_index)
+                self.assertLess(review_index, integrate_index)
+                same_window = normalized[plan_index:integrate_index]
+                self.assertRegex(same_window, r"same.{0,160}reviewer|同一.{0,160}reviewer")
+
     def test_canonical_identity_and_inherited_main_loop(self) -> None:
         canonical = "https://github.com/vincemakes/model-boss"
         for language, text in (("en", self.en), ("zh", self.zh)):
@@ -188,12 +211,15 @@ class DocumentationTests(unittest.TestCase):
             ("zh", _level_two_section(self.zh, "从 Token Saver 迁移")),
             ("devnotes", _level_two_section(self.devnotes, "从 Token Saver 迁移")),
         )
-        command = (
-            "python3 scripts/model-boss.py setup-providers "
-            "--legacy-source <absolute-old-providers.env>"
-        )
         for language, migration in migrations:
             with self.subTest(language=language):
+                command = (
+                    "python3 <model-boss-skill-root>/scripts/model-boss.py setup-providers "
+                    "--legacy-source <absolute-old-providers.env>"
+                    if language in {"en", "zh"}
+                    else "python3 scripts/model-boss.py setup-providers "
+                    "--legacy-source <absolute-old-providers.env>"
+                )
                 self.assertIn(command, migration)
                 self.assertRegex(
                     migration,
@@ -259,12 +285,15 @@ class DocumentationTests(unittest.TestCase):
             ("zh", self.zh, "从 Token Saver 迁移"),
             ("devnotes", self.devnotes, "从 Token Saver 迁移"),
         )
-        command = (
-            "python3 scripts/model-boss.py setup-providers "
-            "--legacy-source <absolute-old-providers.env>"
-        )
         for language, text, heading in documents:
             with self.subTest(language=language):
+                command = (
+                    "python3 <model-boss-skill-root>/scripts/model-boss.py setup-providers "
+                    "--legacy-source <absolute-old-providers.env>"
+                    if language in {"en", "zh"}
+                    else "python3 scripts/model-boss.py setup-providers "
+                    "--legacy-source <absolute-old-providers.env>"
+                )
                 active = text[: text.index(f"## {heading}")]
                 migration = _level_two_section(text, heading)
                 self.assertRegex(

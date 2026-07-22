@@ -254,6 +254,13 @@ class BundleRoundTripTests(BundleTestCase):
         self.assertIsInstance(created, PlanReviewReceipt)
         self.assertEqual(read_plan_review_receipt(self.resources), created)
         self.assertEqual(created.task_sha256, _digest(task))
+        self.assertEqual(created.goal, "make the bounded change")
+        self.assertEqual(
+            created.proposed_plan,
+            "change only task.txt and run the gate",
+        )
+        self.assertEqual(created.acceptance_criteria, ("the gate passes",))
+        self.assertEqual(created.risks, ("avoid unrelated files",))
         self.assertEqual(
             created.source_snapshot_hash,
             _digest(encode_source_snapshot(self.snapshot)),
@@ -301,6 +308,62 @@ class BundleRoundTripTests(BundleTestCase):
                 fingerprint_evidence_source="identity-handshake",
                 reviewer_read_only_enforced=True,
             )
+
+    def test_plan_receipt_rejects_context_hash_tampering_and_unknown_fields(self) -> None:
+        task = b'{"allowed_paths":["task.txt"],"gates":[{"argv":["true"],"cwd":".","timeout_seconds":10}],"prompt":"change task.txt","version":1}'
+        packet = build_plan_review_packet(
+            task,
+            self.snapshot,
+            {
+                "version": 1,
+                "goal": "make the bounded change",
+                "proposed_plan": "change only task.txt",
+                "acceptance_criteria": ["the gate passes"],
+                "risks": [],
+            },
+            invocation_id=self.resources.invocation_id,
+            main_fingerprint="example:balanced-v1:default",
+            reviewer_route_id="authority-reviewer",
+            reviewer_fingerprint="example:authority-v1:default",
+            fingerprint_evidence_source="identity-handshake",
+            reviewer_read_only_enforced=True,
+        )
+        value = json.loads(packet)
+        seal_plan_review_receipt(
+            self.resources,
+            packet=packet,
+            decision="approve",
+            approval_binding_hash=value["approval_binding_hash"],
+            reviewer_route_id="authority-reviewer",
+            reviewer_fingerprint="example:authority-v1:default",
+            fingerprint_evidence_source="identity-handshake",
+            reviewer_read_only_enforced=True,
+            main_fingerprint="example:balanced-v1:default",
+            message="approved exact plan",
+            requested_changes=(),
+        )
+        original = json.loads(self.resources.plan_evidence_path.read_text(encoding="ascii"))
+        for mutation in ("context", "unknown"):
+            with self.subTest(mutation=mutation):
+                changed = dict(original)
+                if mutation == "context":
+                    changed["goal"] = "forged goal"
+                else:
+                    changed["unexpected"] = True
+                self.resources.plan_evidence_path.chmod(0o600)
+                self.resources.plan_evidence_path.write_text(
+                    json.dumps(changed, sort_keys=True, separators=(",", ":")),
+                    encoding="ascii",
+                )
+                self.resources.plan_evidence_path.chmod(0o400)
+                with self.assertRaises(BundleError):
+                    read_plan_review_receipt(self.resources)
+                self.resources.plan_evidence_path.chmod(0o600)
+                self.resources.plan_evidence_path.write_text(
+                    json.dumps(original, sort_keys=True, separators=(",", ":")),
+                    encoding="ascii",
+                )
+                self.resources.plan_evidence_path.chmod(0o400)
 
     def test_max_final_review_is_bound_to_the_same_plan_reviewer(self) -> None:
         task = b'{"allowed_paths":["task.txt"],"gates":[{"argv":["true"],"cwd":".","timeout_seconds":10}],"prompt":"change task.txt","version":1}'
@@ -352,21 +415,71 @@ class BundleRoundTripTests(BundleTestCase):
             authority_mode="max",
         )
         sealed = read_sealed_delta_bundle(self.resources)
+        final_context = {
+            "version": 1,
+            "goal": "make the bounded change",
+            "approved_plan": "change only task.txt",
+            "acceptance_criteria": ["the gate passes"],
+            "main_loop_verdict": "approve",
+        }
+        for field_name, forged_value in (
+            ("goal", "forged goal"),
+            ("approved_plan", "forged plan"),
+            ("acceptance_criteria", ["forged criterion"]),
+        ):
+            with self.subTest(field_name=field_name):
+                forged = dict(final_context)
+                forged[field_name] = forged_value
+                with self.assertRaisesRegex(BundleError, "approved plan context"):
+                    build_final_review_packet(
+                        sealed,
+                        forged,
+                        plan_receipt=plan_receipt,
+                    )
         final_packet = build_final_review_packet(
             sealed,
-            {
-                "version": 1,
-                "goal": "make the bounded change",
-                "approved_plan": "change only task.txt",
-                "acceptance_criteria": ["the gate passes"],
-                "main_loop_verdict": "approve",
-            },
+            final_context,
             plan_receipt=plan_receipt,
+        )
+        self.assertEqual(
+            json.loads(final_packet)["approved_plan_context"],
+            {
+                "acceptance_criteria": ["the gate passes"],
+                "goal": "make the bounded change",
+                "proposed_plan": "change only task.txt",
+                "risks": [],
+                "version": 1,
+            },
         )
         self.assertEqual(
             json.loads(final_packet)["plan_approval_binding_hash"],
             plan_receipt.approval_binding_hash,
         )
+        forged_packet_value = json.loads(final_packet)
+        forged_packet_value["acceptance_and_plan"]["goal"] = "forged packet goal"
+        forged_packet = json.dumps(
+            forged_packet_value,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("ascii")
+        with self.assertRaisesRegex(BundleError, "approved plan context"):
+            seal_final_review_receipt(
+                self.resources,
+                packet=forged_packet,
+                decision="approve",
+                approval_binding_hash=ApprovalBinding(
+                    source_snapshot_hash=sealed.metadata.source_snapshot_hash,
+                    worker_delta_hash=sealed.metadata.worker_delta_hash,
+                    projected_task_patch_hash=sealed.metadata.projected_task_patch_hash,
+                ).canonical_hash,
+                reviewer_route_id=plan_receipt.reviewer_route_id,
+                reviewer_fingerprint=plan_receipt.reviewer_fingerprint,
+                fingerprint_evidence_source=plan_receipt.fingerprint_evidence_source,
+                reviewer_read_only_enforced=True,
+                main_fingerprint=plan_receipt.main_fingerprint,
+                message="forged final packet",
+                requested_changes=(),
+            )
 
         with self.assertRaisesRegex(BundleError, "plan reviewer"):
             seal_final_review_receipt(
