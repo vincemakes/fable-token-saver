@@ -1,4 +1,4 @@
-# Token Saver protocol
+# Model Boss protocol
 
 This reference expands the provider-neutral workflow in `SKILL.md`. Host adapters may
 change how roles are launched, but they must not weaken these state, evidence, or
@@ -15,13 +15,18 @@ normally.
 
 ## Authority topologies
 
+The Boss is the workflow authority holder. Lite assigns that authority to the
+inherited main loop inline. Max assigns it to one distinct, verified external
+reviewer while the inherited main loop coordinates and audits.
+
 Lite is a two-level topology when a worker is used:
 
 ```text
 authority main loop  ──plans/reviews/integrates──>  worker
 ```
 
-The worker may be omitted. Both authority checkpoints remain inline in the main loop.
+The worker may be omitted. The inherited main loop owns both authority checkpoints
+inline.
 
 Max is always anchored by a separate authority reviewer:
 
@@ -31,9 +36,8 @@ authority reviewer  <──plan/final evidence──  balanced main loop
                                                └── optional worker
 ```
 
-The optional worker may be lower-cost or omitted. This produces either two levels
-(reviewer + main loop) or three (reviewer + main loop + worker). The selected main
-loop never changes.
+The optional worker may be omitted. This produces either two levels (reviewer + main
+loop) or three (reviewer + main loop + worker). The selected main loop never changes.
 
 The resolved topology is not a cosmetic label. The worker entry seals an
 `authority_mode` of `lite` or `max` into the invocation-bound delta bundle. That

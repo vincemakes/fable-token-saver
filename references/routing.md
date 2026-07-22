@@ -1,4 +1,4 @@
-# Token Saver routing
+# Model Boss routing
 
 Routing is capability-based. Provider profiles supply convenient aliases; the core
 does not branch on brand or model name.
@@ -6,7 +6,7 @@ does not branch on brand or model name.
 ## Main loop is input
 
 The host-selected conversation model is immutable input. Neither profile, user,
-project, nor run configuration may contain `main_loop`. Token Saver only resolves the
+project, nor run configuration may contain `main_loop`. Model Boss only resolves the
 mode and spawned reviewer, worker, scout, or mechanic routes around that inherited
 main loop.
 
@@ -22,6 +22,12 @@ Resolution order is:
 2. user config
 3. project config
 4. per-run override
+
+The published configuration surfaces are
+[`config/model-boss.example.json`](../config/model-boss.example.json) and
+[`config/model-boss.schema.json`](../config/model-boss.schema.json). Project discovery
+uses `.model-boss.json`; user discovery uses the `model-boss/config.json` location
+under the selected absolute configuration root.
 
 A higher route definition replaces the whole lower definition. Preference lists are
 replaced independently. Provenance accompanies each selected value. Credentials are

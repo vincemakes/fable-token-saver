@@ -33,15 +33,21 @@ the exact resolved fingerprint and prove it differs from the main loop.
 
 ## OS-sandboxed writers
 
-Bypass commands are refused without a verified OS sandbox. For each invocation Token
-Saver records the source snapshot, creates a disposable worktree and private route
+Bypass commands are refused without a verified OS sandbox. For each invocation Model
+Boss records the source snapshot, creates a disposable worktree and private route
 state, verifies the sandbox can write inside and cannot write to an outside sentinel,
 then runs the worker only in that worktree. The source repository, other worktrees,
 user config, credential files, and shell startup files remain outside its write scope.
 
-Credentials are copied by named binding into the child environment only. They never
-enter prompts, logs, config hashes, manifests, or review packets. On a platform with no
-verified backend, return `sandbox_unavailable` without launching the bypass command.
+Invocation state uses `model-boss-invocation-<invocation-id>` and `.model-boss-*`
+receipt names, with the isolated worker ref `refs/heads/model-boss-worker`. The child
+manifest binding is `MODEL_BOSS_INVOCATION_MANIFEST`; trusted gate-failure context is
+`MODEL_BOSS_TRUSTED_GATE_FAILURES`.
+
+Credentials selected through `MODEL_BOSS_CREDENTIALS` are copied by named binding
+into the child environment only. They never enter prompts, logs, config hashes,
+manifests, or review packets. On a platform with no verified backend, return
+`sandbox_unavailable` without launching the bypass command.
 
 This protects credential values from model context and recorded evidence, not from the
 provider client process itself. That executable necessarily receives the route
@@ -52,17 +58,18 @@ compromised provider binary from exfiltrating credentials or readable data throu
 the network connection the provider route requires.
 
 The external worker model tool allowlist is exactly `Read`, `Glob`, `Grep`, `Edit`, and
-`Write`. Bash is disabled; Web and MCP are unavailable. Token Saver itself runs the
+`Write`. Bash is disabled; Web and MCP are unavailable. Model Boss itself runs the
 task's declared gate argument arrays after the model call. Gates are host operations,
 not shell capability exposed to the model.
 
 ### One-shot worker command
 
-`token-saver-route.py worker` is the supported bridge from a Claude Code or Codex main
-loop to the Kimi/GLM bypass names. Calling a bypass wrapper from an ordinary checkout
-is intentionally refused. The worker command accepts an absolute repository, an
-existing temporary parent outside that repository, one of the documented provider
-route names, and a task JSON file with this exact schema:
+`scripts/model-boss.py worker`, backed by `runtime.model_boss`, is the supported bridge
+from a Claude Code or Codex main loop to the Kimi/GLM bypass names. Calling a bypass
+wrapper from an ordinary checkout is intentionally refused. The worker command
+accepts an absolute repository, an existing temporary parent outside that repository,
+one of the documented provider route names, and a task JSON file with this exact
+schema:
 
 ```json
 {
@@ -84,7 +91,7 @@ successful call leaves one active manifest and sealed bundle for review. Invoke 
 from either a Claude Code or Codex main loop with a required mode:
 
 ```bash
-python3 scripts/token-saver-route.py worker \
+python3 scripts/model-boss.py worker \
   --repo /absolute/path/to/repository \
   --temp-parent /absolute/path/to/existing-temp-parent \
   --route claude-kimi-bypass \
@@ -113,18 +120,18 @@ In Lite, the already-selected main loop must reason about and review the complet
 sealed evidence before it records inline authority:
 
 ```bash
-python3 scripts/token-saver-route.py review --inline \
+python3 scripts/model-boss.py review --inline \
   --main-fingerprint <provider:model:variant> \
   --manifest <manifest> \
   --context /absolute/path/to/review-context.json
 ```
 
-In Max, a possibly lower-tier main loop coordinates and reviews, then an external
-higher-authority reviewer selected by profile and route decides. Max can still use an
-even lower worker for implementation:
+In Max, the inherited main loop coordinates and audits, then a distinct verified
+external reviewer selected by profile and route owns both authority decisions. Max
+can still use an optional separate worker for implementation:
 
 ```bash
-python3 scripts/token-saver-route.py review --profile /absolute/path/to/profile.json \
+python3 scripts/model-boss.py review --profile /absolute/path/to/profile.json \
   --route <reviewer-route> \
   --main-fingerprint <provider:model:variant> \
   --manifest <manifest> \
@@ -137,7 +144,7 @@ identity, sealed `authority_mode`, decision, and the exact
 Integration accepts only the manifest and reads that sealed receipt itself:
 
 ```bash
-python3 scripts/token-saver-route.py integrate <manifest>
+python3 scripts/model-boss.py integrate <manifest>
 ```
 
 A missing, stale, wrong-mode, or invalid receipt blocks integration before the

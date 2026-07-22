@@ -7,10 +7,10 @@ description: >-
 
 # Model Boss
 
-Token Saver is a model-independent orchestration protocol. The model already selected
+Model Boss is a model-independent orchestration protocol. The model already selected
 for the conversation is the main loop; keep it unchanged. Routes describe spawned
-roles only. Lite and Max name where authority lives, not a provider, price, or quality
-claim.
+roles only. The Boss is the workflow authority holder. Lite and Max name where that
+authority lives, not a provider, price, or quality claim.
 
 ## 1. Resolve the inherited main loop and routes
 
@@ -48,13 +48,14 @@ Worker: <route|main loop|none>
 Resolution source: <explicit|project|user|profile>
 ```
 
-Lite keeps planning and final review authority inline in the selected main loop. A
+In Lite, the inherited main loop is the Boss and owns both AUTHORITY_PLAN_CHECK and
+AUTHORITY_FINAL_CHECK inline while continuing to coordinate and audit the run. A
 separate worker is optional.
 
-Max keeps coordination in the selected main loop and places both authority
-checkpoints in one eligible reviewer with a distinct canonical fingerprint. A cheaper
-worker is optional: Max may be two levels (main loop + reviewer) or three levels (main
-loop + reviewer + worker).
+In Max, one eligible, verified external reviewer is the Boss and owns both authority
+checkpoints with a canonical fingerprint distinct from the main loop. The inherited
+main loop coordinates and audits the run. A separate worker is optional: Max may be
+two levels (main loop + reviewer) or three levels (main loop + reviewer + worker).
 
 Require every sealed external-worker invocation to pass `worker --mode lite|max`.
 Seal its `authority_mode` into the bundle; it cannot switch, change, or downgrade for
@@ -64,7 +65,7 @@ topology requires a new worker invocation.
 
 ## 3. Eligibility and classification gate
 
-Use Token Saver only when orchestration overhead is justified: a bounded task with
+Use Model Boss only when orchestration overhead is justified: a bounded task with
 testable acceptance criteria, material implementation volume, or repeated mechanical
 work. Step aside for a tiny edit, pure conversation, an unresolved bug whose cause
 still needs diagnosis, or a design/security decision that cannot yet be expressed as
@@ -141,7 +142,7 @@ review, and integrates; the reviewer never implements.
 Run an external worker with one immutable authority topology:
 
 ```bash
-python3 scripts/token-saver-route.py worker \
+python3 scripts/model-boss.py worker \
   --repo <absolute-repository> \
   --temp-parent <existing-absolute-temp-parent> \
   --route <supported-worker-route> \
@@ -149,23 +150,23 @@ python3 scripts/token-saver-route.py worker \
   --mode lite
 ```
 
-Use `--mode lite` when the inherited main loop reasons and reviews while the secondary
-worker implements. Use `--mode max` when a possibly lower-tier main loop coordinates,
-a distinct higher-authority external reviewer decides, and an optional still-lower
-worker implements.
+Use `--mode lite` when the inherited main loop owns both authority decisions inline;
+an optional separate worker may implement. Use `--mode max` when the inherited main
+loop coordinates and audits while a distinct verified external reviewer owns both
+authority decisions; an optional separate worker may implement.
 
 After the main loop reviews the sealed evidence and supplies the strict review-context
 JSON, use the review path that matches the sealed mode:
 
 ```bash
 # Lite
-python3 scripts/token-saver-route.py review --inline \
+python3 scripts/model-boss.py review --inline \
   --main-fingerprint <provider:model:variant> \
   --manifest <manifest> \
   --context <absolute-review-context.json>
 
 # Max
-python3 scripts/token-saver-route.py review --profile <profile-or-path> \
+python3 scripts/model-boss.py review --profile <profile-or-path> \
   --route <reviewer-route> \
   --main-fingerprint <provider:model:variant> \
   --manifest <manifest> \
@@ -176,7 +177,7 @@ An approving review seals the final-review receipt inside the invocation. Integr
 only through that manifest; do not accept a caller-authored approval file:
 
 ```bash
-python3 scripts/token-saver-route.py integrate <manifest>
+python3 scripts/model-boss.py integrate <manifest>
 ```
 
 ## 5. Task packet
@@ -223,7 +224,7 @@ prove that out-of-scope contents are unchanged.
 
 For an external write route, expose exactly `Read`, `Glob`, `Grep`, `Edit`, and `Write`
 to the model. Keep Bash disabled and make Web and MCP unavailable. Execute declared
-gate argument arrays in the Token Saver host after the model call; never give the
+gate argument arrays in the Model Boss host after the model call; never give the
 model a shell merely so it can run a gate.
 
 Exclude credential values from prompts, logs, manifests, and evidence packets, but do
