@@ -26,7 +26,7 @@ from .models import Route, Status, WorkerSandboxIdentity
 
 
 _SHA256_LENGTH = 64
-_PROBE_PREFIX = "TOKEN-SAVER-SANDBOX-PROBE"
+_PROBE_PREFIX = "MODEL-BOSS-SANDBOX-PROBE"
 _PROBE_KEYS = (
     "allowed_read",
     "protected_read_denied",
@@ -80,7 +80,7 @@ values = (
     worktree_write,
     outside_write_denied,
 )
-fields = ["TOKEN-SAVER-SANDBOX-PROBE"]
+fields = ["MODEL-BOSS-SANDBOX-PROBE"]
 fields.extend(
     key + "=" + ("1" if value else "0")
     for key, value in zip(
@@ -343,7 +343,7 @@ class SandboxPolicy:
                         (identity.content_hash or "").encode("ascii"),
                     )
                 )
-        return _framed_hash(b"TOKEN-SAVER-SANDBOX-POLICY\0", fields)
+        return _framed_hash(b"MODEL-BOSS-SANDBOX-POLICY\0", fields)
 
 
 @dataclass(frozen=True)
@@ -501,7 +501,7 @@ def _command_binding_hash(
     profile_hash: str,
 ) -> str:
     return _framed_hash(
-        b"TOKEN-SAVER-VERIFIED-SANDBOX\0",
+        b"MODEL-BOSS-VERIFIED-SANDBOX\0",
         (
             backend.encode("utf-8"),
             policy.binding_hash.encode("ascii"),
@@ -604,14 +604,14 @@ class VerifiedSandbox:
     @property
     def worktree_identity(self) -> str:
         return _root_binding_hash(
-            b"TOKEN-SAVER-WORKTREE-IDENTITY\0",
+            b"MODEL-BOSS-WORKTREE-IDENTITY\0",
             self.policy._identities[0],
         )
 
     @property
     def route_state_identity(self) -> str:
         return _root_binding_hash(
-            b"TOKEN-SAVER-ROUTE-STATE-IDENTITY\0",
+            b"MODEL-BOSS-ROUTE-STATE-IDENTITY\0",
             self.policy._identities[1],
         )
 
@@ -1202,7 +1202,7 @@ def select_verified_backend(
         else:
             launcher_prefix = _bwrap_prefix(policy, route_executable, launcher)
             profile_hash = _framed_hash(
-                b"TOKEN-SAVER-BWRAP-PROFILE\0",
+                b"MODEL-BOSS-BWRAP-PROFILE\0",
                 tuple(member.encode("utf-8") for member in launcher_prefix),
             )
     except SandboxPolicyError:

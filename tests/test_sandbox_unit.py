@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import runtime.model_boss.sandbox as sandbox_module
 from runtime.model_boss.models import (
     CapabilityBand,
     Role,
@@ -23,6 +24,16 @@ from runtime.model_boss.sandbox import (
     build_bwrap_argv,
     render_macos_profile,
 )
+
+
+class RuntimeIdentityTests(unittest.TestCase):
+    def test_active_security_domains_use_model_boss_identity(self) -> None:
+        runtime_root = Path(__file__).resolve().parents[1] / "runtime" / "model_boss"
+        for name in ("evidence.py", "integration.py", "models.py", "sandbox.py"):
+            with self.subTest(name=name):
+                source = (runtime_root / name).read_text(encoding="utf-8")
+                self.assertNotIn("TOKEN-SAVER", source)
+        self.assertEqual(sandbox_module._PROBE_PREFIX, "MODEL-BOSS-SANDBOX-PROBE")
 
 
 class SandboxPolicyTests(unittest.TestCase):

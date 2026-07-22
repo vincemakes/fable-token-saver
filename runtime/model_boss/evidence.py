@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 
 
-MAGIC = b"TOKEN-SAVER-EVIDENCE\0"
+MAGIC = b"MODEL-BOSS-EVIDENCE\0"
 FORMAT_VERSION = 1
 _MAX_U64 = (1 << 64) - 1
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z", re.ASCII)

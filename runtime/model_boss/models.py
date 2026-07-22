@@ -241,7 +241,7 @@ def _sandbox_binding_hash(
         )
     except (UnicodeError, OverflowError):
         raise ValueError("sandbox binding fields must be safely encodable") from None
-    encoded = bytearray(b"TOKEN-SAVER-SANDBOX-BINDING\0")
+    encoded = bytearray(b"MODEL-BOSS-SANDBOX-BINDING\0")
     for field in fields:
         encoded.extend(len(field).to_bytes(8, "big"))
         encoded.extend(field)

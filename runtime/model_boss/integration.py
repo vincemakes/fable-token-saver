@@ -96,7 +96,7 @@ def _approval_contract_hash(approval: Approval) -> str:
         approval.binding.projected_task_patch_hash.encode("ascii"),
         approval.approval_binding_hash.encode("ascii"),
     )
-    encoded = bytearray(b"TOKEN-SAVER-APPROVAL-CONTRACT\0")
+    encoded = bytearray(b"MODEL-BOSS-APPROVAL-CONTRACT\0")
     for value in fields:
         encoded.extend(len(value).to_bytes(8, "big"))
         encoded.extend(value)
