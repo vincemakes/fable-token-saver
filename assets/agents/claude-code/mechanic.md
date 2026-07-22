@@ -1,6 +1,6 @@
 ---
-name: token-saver-mechanic
-description: "Mechanical worker for the Token Saver default Anthropic profile; other profiles remain supported."
+name: model-boss-mechanic
+description: "Mechanical worker for the Model Boss default Anthropic profile; other profiles remain supported."
 model: haiku
 ---
 

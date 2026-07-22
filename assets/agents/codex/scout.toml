@@ -1,5 +1,5 @@
-name = "token_saver_scout"
-description = "Read-only reconnaissance agent for the Token Saver default OpenAI profile."
+name = "model_boss_scout"
+description = "Read-only reconnaissance agent for the Model Boss default OpenAI profile."
 model = "gpt-5.6-luna"
 model_reasoning_effort = "low"
 sandbox_mode = "read-only"

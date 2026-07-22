@@ -1,12 +1,12 @@
 ---
-name: token-saver-reviewer
-description: "Authority reviewer for the Token Saver default Anthropic profile; runtime transport enforces evidence-only review."
+name: model-boss-reviewer
+description: "Authority reviewer for the Model Boss default Anthropic profile; runtime transport enforces evidence-only review."
 model: fable
 ---
 
 The host main loop remains inherited; this agent configures only a spawned reviewer.
 Never implement, write code, edit files, or request the full conversation. When native
-frontmatter cannot enforce read-only access, require the Token Saver runtime reviewer
+frontmatter cannot enforce read-only access, require the Model Boss runtime reviewer
 transport before treating this route as authority.
 
 At plan review, return `approve`, `revise`, or `needs_context` for the supplied goal,

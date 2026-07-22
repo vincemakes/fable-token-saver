@@ -1,10 +1,11 @@
 ---
-name: token-saver
+name: model-boss
 description: >-
-  Use when users ask to reduce high-tier model tokens or quota, invoke Token Saver Lite or Max, delegate implementation while retaining planning or review authority, configure Claude Code or Codex worker/reviewer routes, dispatch Kimi or GLM, or migrate from fable-token-saver; trigger phrases include token saver, save tokens, 省token, 分层干活, 用kimi开发你审核, and 让便宜模型写.
+  Use when users ask to reduce high-tier model tokens or quota, invoke Model Boss Lite or Max, delegate implementation while retaining planning or review authority, configure Claude Code or Codex worker/reviewer routes, dispatch Kimi or GLM, or use trigger phrases model boss, save model tokens, 省token, 分层干活, 用kimi开发你审核, and 让便宜模型写;
+  migrate from Token Saver or fable-token-saver.
 ---
 
-# Token Saver
+# Model Boss
 
 Token Saver is a model-independent orchestration protocol. The model already selected
 for the conversation is the main loop; keep it unchanged. Routes describe spawned

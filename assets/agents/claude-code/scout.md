@@ -1,6 +1,6 @@
 ---
-name: token-saver-scout
-description: "Read-only scout for the Token Saver default Anthropic profile; other profiles remain supported."
+name: model-boss-scout
+description: "Read-only scout for the Model Boss default Anthropic profile; other profiles remain supported."
 model: haiku
 ---
 

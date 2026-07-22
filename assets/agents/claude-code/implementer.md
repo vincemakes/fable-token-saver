@@ -1,6 +1,6 @@
 ---
-name: token-saver-implementer
-description: "Implementation worker for the Token Saver default Anthropic profile; other profiles remain supported."
+name: model-boss-implementer
+description: "Implementation worker for the Model Boss default Anthropic profile; other profiles remain supported."
 model: sonnet
 ---
 

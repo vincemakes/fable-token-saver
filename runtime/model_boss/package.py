@@ -1,4 +1,4 @@
-"""Deterministic, allowlisted Token Saver skill packaging."""
+"""Deterministic, allowlisted Model Boss skill packaging."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Sequence
 
 
-PACKAGE_ROOT = "token-saver"
+PACKAGE_ROOT = "model-boss"
 PACKAGE_MANIFEST = (
     "SKILL.md",
     "agents/openai.yaml",
@@ -144,8 +144,8 @@ def _validate_skill_frontmatter(payload: bytes) -> None:
     if match is None:
         raise PackageError("SKILL.md frontmatter is missing")
     frontmatter = match.group(1)
-    if re.search(r"(?m)^name:\s*token-saver\s*$", frontmatter) is None:
-        raise PackageError("SKILL.md must use the token-saver name")
+    if re.search(r"(?m)^name:\s*model-boss\s*$", frontmatter) is None:
+        raise PackageError("SKILL.md must use the model-boss name")
     description_match = re.search(
         r"(?ms)^description:\s*>-\s*\n((?:[ \t]+.*(?:\n|\Z))+)",
         frontmatter,
@@ -277,7 +277,7 @@ def validate_package(
 ) -> PackageResult:
     root, payloads = _validate_sources(repo_root)
     path = Path(archive_path)
-    if path.name == "fable-token-saver.skill":
+    if path.name in {"token-saver.skill", "fable-token-saver.skill"}:
         raise PackageError("obsolete artifact name is rejected")
     return _validate_archive(root, path.resolve(strict=True), payloads)
 
@@ -296,7 +296,7 @@ def build_package(
 ) -> PackageResult:
     root, payloads = _validate_sources(repo_root)
     requested = Path(output_path)
-    if requested.name == "fable-token-saver.skill":
+    if requested.name in {"token-saver.skill", "fable-token-saver.skill"}:
         raise PackageError("obsolete artifact name is rejected")
     try:
         parent = requested.parent.resolve(strict=True)
@@ -309,7 +309,7 @@ def build_package(
         metadata = os.lstat(destination)
         if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
             raise PackageError("existing package output must be a non-symlink regular file")
-    temporary = parent / f".{destination.name}.token-saver-{os.getpid()}-{secrets.token_hex(12)}.tmp"
+    temporary = parent / f".{destination.name}.model-boss-{os.getpid()}-{secrets.token_hex(12)}.tmp"
     descriptor = -1
     try:
         descriptor = os.open(
@@ -344,7 +344,7 @@ def build_package(
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="python -m runtime.token_saver.package")
+    parser = argparse.ArgumentParser(prog="python -m runtime.model_boss.package")
     parser.add_argument("--repo-root", default=os.curdir)
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--output")
@@ -360,7 +360,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             result = validate_package(arguments.repo_root, arguments.validate)
     except PackageError as error:
-        print(f"token-saver package error: {error}", file=sys.stderr)
+        print(f"Model Boss package error: {error}", file=sys.stderr)
         return 2
     print(result.sha256)
     return 0

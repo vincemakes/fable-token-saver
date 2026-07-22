@@ -1,5 +1,5 @@
-name = "token_saver_mechanic"
-description = "Mechanical worker for the Token Saver default OpenAI profile."
+name = "model_boss_mechanic"
+description = "Mechanical worker for the Model Boss default OpenAI profile."
 model = "gpt-5.6-luna"
 model_reasoning_effort = "low"
 sandbox_mode = "workspace-write"
