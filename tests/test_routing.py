@@ -222,10 +222,7 @@ class CanonicalIdentityTests(unittest.TestCase):
             band=CapabilityBand.AUTHORITY,
             transport=Transport.EXTERNAL_CLI,
         )
-        for invalid_source in (
-            FingerprintEvidenceSource.HOST_METADATA,
-            FingerprintEvidenceSource.IDENTITY_HANDSHAKE,
-        ):
+        for invalid_source in (FingerprintEvidenceSource.HOST_METADATA,):
             with self.subTest(invalid_source=invalid_source):
                 _, preflight, resolution = _resolve(
                     _main(TERRA, CapabilityBand.BALANCED),
@@ -244,6 +241,24 @@ class CanonicalIdentityTests(unittest.TestCase):
                 )
                 self.assertEqual(preflight.status, Status.REVIEWER_UNAVAILABLE)
                 self.assertEqual(resolution.status, Status.REVIEWER_UNAVAILABLE)
+
+        _, preflight, resolution = _resolve(
+            _main(TERRA, CapabilityBand.BALANCED),
+            _config(
+                (external,),
+                mode=Mode.MAX,
+                reviewers=(external.route_id,),
+            ),
+            {
+                external.route_id: _probe(
+                    external,
+                    SOL,
+                    evidence=FingerprintEvidenceSource.IDENTITY_HANDSHAKE,
+                )
+            },
+        )
+        self.assertEqual(preflight.status, Status.OK)
+        self.assertEqual(resolution.status, Status.OK)
 
     def test_exact_pin_uses_canonical_case_rules_and_variant(self) -> None:
         unicode_route = _route(
