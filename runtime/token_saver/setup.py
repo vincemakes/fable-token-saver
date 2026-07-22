@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import shlex
 import stat
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +23,14 @@ LEGACY_KEYS = frozenset(
         "GLM_SMALL_FAST_MODEL",
     }
 )
+WRAPPER_SPECS = {
+    "claude-kimi": ("kimi", "safe"),
+    "claude-kimi-bypass": ("kimi", "sandboxed-worker"),
+    "claude-glm": ("glm", "safe"),
+    "claude-glm-bypass": ("glm", "sandboxed-worker"),
+    "claude-glm-turbo": ("glm-turbo", "safe"),
+    "claude-glm-turbo-bypass": ("glm-turbo", "sandboxed-worker"),
+}
 
 
 class SetupError(ValueError):
@@ -253,12 +262,163 @@ def load_credentials(path: str | os.PathLike[str]) -> dict[str, str]:
     return dict(credentials)
 
 
+def _validated_runner(path: str | os.PathLike[str]) -> Path:
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        raise SetupError("runner path must be absolute")
+    try:
+        lexical = os.lstat(candidate)
+        resolved = candidate.resolve(strict=True)
+        metadata = resolved.stat()
+    except OSError:
+        raise SetupError("runner is unavailable") from None
+    if (
+        stat.S_ISLNK(lexical.st_mode)
+        or not stat.S_ISREG(metadata.st_mode)
+        or not os.access(resolved, os.X_OK)
+    ):
+        raise SetupError("runner must be a non-symlink executable regular file")
+    return resolved
+
+
+def render_wrapper(
+    runner: str | os.PathLike[str],
+    route: str,
+    policy: str,
+) -> str:
+    """Render a two-line wrapper with static policy and byte-preserving argv."""
+
+    if (route, policy) not in set(WRAPPER_SPECS.values()):
+        raise SetupError("wrapper route or policy is unsupported")
+    executable = _validated_runner(runner)
+    return (
+        "#!/bin/sh\n"
+        f"exec {shlex.quote(os.fspath(executable))} provider-exec "
+        f"--route {shlex.quote(route)} --policy {shlex.quote(policy)} -- \"$@\"\n"
+    )
+
+
+def install_provider_wrappers(
+    runner: str | os.PathLike[str],
+    install_path: str | os.PathLike[str],
+) -> SetupResult:
+    """Install the exact compatibility wrapper set without embedding credentials."""
+
+    executable = _validated_runner(runner)
+    directory = Path(install_path)
+    if _path_exists(directory):
+        metadata = os.lstat(directory)
+        if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+            raise SetupError("wrapper install path must be a non-symlink directory")
+    else:
+        try:
+            directory.mkdir(mode=0o700)
+        except OSError:
+            raise SetupError("wrapper install directory could not be created") from None
+    for name, (route, policy) in WRAPPER_SPECS.items():
+        destination = directory / name
+        if _path_exists(destination):
+            metadata = os.lstat(destination)
+            if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+                raise SetupError("existing wrapper is not a regular file")
+        payload = render_wrapper(executable, route, policy).encode("utf-8")
+        temporary = directory / f".{name}.{os.getpid()}-{secrets.token_hex(8)}.tmp"
+        descriptor = -1
+        try:
+            descriptor = os.open(
+                temporary,
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | getattr(os, "O_NOFOLLOW", 0),
+                0o755,
+            )
+            os.fchmod(descriptor, 0o755)
+            with os.fdopen(descriptor, "wb") as stream:
+                descriptor = -1
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, destination)
+        except OSError:
+            raise SetupError("provider wrapper could not be installed atomically") from None
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+    _fsync_directory(directory)
+    return SetupResult("configured", directory)
+
+
+def provider_child_environment(
+    route: str,
+    credentials: Mapping[str, str],
+    base_environment: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Map credential JSON into the narrow Anthropic-compatible child contract."""
+
+    if route not in {"kimi", "glm", "glm-turbo"}:
+        raise SetupError("provider route is unsupported")
+    source = dict(base_environment or {})
+    environment = {
+        name: source[name]
+        for name in (
+            "PATH",
+            "HOME",
+            "TERM",
+            "LANG",
+            "LC_ALL",
+            "SSL_CERT_FILE",
+            "SSL_CERT_DIR",
+            "REQUESTS_CA_BUNDLE",
+        )
+        if isinstance(source.get(name), str)
+    }
+    if "PATH" not in environment:
+        environment["PATH"] = os.defpath
+    environment.setdefault("LANG", "C")
+    environment.setdefault("LC_ALL", "C")
+    if route == "kimi":
+        required = ("KIMI_BASE_URL", "KIMI_AUTH_TOKEN")
+        if any(name not in credentials for name in required):
+            raise SetupError("Kimi credentials are incomplete")
+        environment["ANTHROPIC_BASE_URL"] = credentials["KIMI_BASE_URL"]
+        environment["ANTHROPIC_AUTH_TOKEN"] = credentials["KIMI_AUTH_TOKEN"]
+    else:
+        required = (
+            "GLM_BASE_URL",
+            "GLM_AUTH_TOKEN",
+            "GLM_MODEL",
+            "GLM_SMALL_FAST_MODEL",
+        )
+        if any(name not in credentials for name in required):
+            raise SetupError("GLM credentials are incomplete")
+        environment["ANTHROPIC_BASE_URL"] = credentials["GLM_BASE_URL"]
+        environment["ANTHROPIC_AUTH_TOKEN"] = credentials["GLM_AUTH_TOKEN"]
+        environment["ANTHROPIC_MODEL"] = (
+            credentials["GLM_MODEL"]
+            if route == "glm"
+            else credentials["GLM_SMALL_FAST_MODEL"]
+        )
+        environment["ANTHROPIC_SMALL_FAST_MODEL"] = credentials[
+            "GLM_SMALL_FAST_MODEL"
+        ]
+    return environment
+
+
 __all__ = (
     "CREDENTIALS_VERSION",
     "LEGACY_KEYS",
+    "WRAPPER_SPECS",
     "SetupError",
     "SetupResult",
     "load_credentials",
+    "install_provider_wrappers",
     "migrate_legacy_credentials",
     "parse_legacy_env",
+    "provider_child_environment",
+    "render_wrapper",
 )

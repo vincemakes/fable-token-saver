@@ -33,6 +33,13 @@ from .repository import (
     project_task_patch,
 )
 from .sandbox import UnavailableSandbox, VerifiedSandbox
+from .setup import (
+    SetupError,
+    install_provider_wrappers,
+    load_credentials,
+    migrate_legacy_credentials,
+    provider_child_environment,
+)
 
 
 CLI_VERSION = 1
@@ -418,6 +425,10 @@ def build_parser() -> argparse.ArgumentParser:
         child = subparsers.add_parser(name)
         if name == "validate-config":
             child.add_argument("path")
+        elif name == "setup-providers":
+            child.add_argument("--legacy-source")
+            child.add_argument("--credentials")
+            child.add_argument("--install-path")
         elif name == "provider-exec":
             child.add_argument("--route", required=True)
             child.add_argument("--policy", choices=("safe", "sandboxed-worker"), required=True)
@@ -441,12 +452,70 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
         print(_json_output(Status.OK))
         return 0
+    if arguments.command == "setup-providers":
+        home = Path(os.environ.get("HOME", ""))
+        if not home.is_absolute():
+            print(_json_output(Status.NEEDS_CONTEXT, message="HOME is unavailable"))
+            return 2
+        legacy = Path(arguments.legacy_source) if arguments.legacy_source else (
+            home / ".claude" / "fable-token-saver" / "providers.env"
+        )
+        if arguments.credentials:
+            credential_path = Path(arguments.credentials)
+        else:
+            xdg = os.environ.get("XDG_CONFIG_HOME")
+            config_root = Path(xdg) if xdg and Path(xdg).is_absolute() else home / ".config"
+            credential_path = config_root / "token-saver" / "credentials.json"
+        try:
+            migration = migrate_legacy_credentials(legacy, credential_path)
+            if arguments.install_path:
+                runner = Path(__file__).resolve().parents[2] / "scripts" / "token-saver-route.py"
+                install_provider_wrappers(runner, Path(arguments.install_path))
+        except (OSError, SetupError, ValueError):
+            print(_json_output(Status.NEEDS_CONTEXT, message="provider setup failed safely"))
+            return 2
+        print(_json_output(Status.OK, setup_status=migration.status))
+        return 0
     if arguments.command == "provider-exec":
         provider_args = tuple(arguments.provider_args)
         if not provider_args or provider_args[0] != "--":
             print(_json_output(Status.NEEDS_CONTEXT, message="provider argv requires --"))
             return 2
-        print(_json_output(Status.PROVIDER_UNAVAILABLE, message="route preflight is required"))
+        if arguments.policy == "sandboxed-worker":
+            print(
+                _json_output(
+                    Status.SANDBOX_UNAVAILABLE,
+                    message="a sealed invocation and fresh sandbox probe are required",
+                )
+            )
+            return 3
+        home = Path(os.environ.get("HOME", ""))
+        credential_override = os.environ.get("TOKEN_SAVER_CREDENTIALS")
+        if credential_override:
+            credential_path = Path(credential_override)
+        else:
+            xdg = os.environ.get("XDG_CONFIG_HOME")
+            config_root = Path(xdg) if xdg and Path(xdg).is_absolute() else home / ".config"
+            credential_path = config_root / "token-saver" / "credentials.json"
+        provider = shutil.which("claude")
+        try:
+            if provider is None:
+                raise SetupError("provider executable is unavailable")
+            credentials = load_credentials(credential_path)
+            environment = provider_child_environment(
+                arguments.route,
+                credentials,
+                os.environ,
+            )
+            executable = Path(provider).resolve(strict=True)
+        except (OSError, SetupError, ValueError):
+            print(_json_output(Status.PROVIDER_UNAVAILABLE, message="provider route unavailable"))
+            return 3
+        os.execve(
+            executable,
+            (os.fspath(executable), *provider_args[1:]),
+            environment,
+        )
         return 3
     print(_json_output(Status.NEEDS_CONTEXT, message="command requires an invocation packet"))
     return 2
