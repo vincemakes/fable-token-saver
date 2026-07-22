@@ -56,13 +56,38 @@ All active product surfaces move to the new identity:
 | CLI entry script | `scripts/model-boss.py` |
 | Config files | `config/model-boss.example.json`, `config/model-boss.schema.json` |
 | Environment prefix | `MODEL_BOSS_` |
-| State and task paths | `.model-boss`, `model-boss-runs`, and equivalent platform paths |
-| Agent declarations | `model-boss-<role>` |
+| State and task paths | The exact paths defined below |
+| Claude Code agents | `model-boss-<role>.md`; frontmatter `name: model-boss-<role>` |
+| Codex agents | `model-boss-<role>.toml`; TOML `name = "model_boss_<role>"` |
 | Release artifact | `dist/model-boss.skill` |
 
 Internal JSON schema IDs, user-agent strings, temporary-directory prefixes, help text,
 errors, examples, and test fixtures follow the same canonical naming. Existing generic
 protocol field names such as `authority_mode`, `main_loop`, and `reviewer` do not change.
+
+### Exact path and environment contract
+
+| Purpose | Model Boss value |
+|---|---|
+| Project configuration | `<repository>/.model-boss.json` |
+| POSIX user configuration | `$XDG_CONFIG_HOME/model-boss/config.json` when `XDG_CONFIG_HOME` is absolute; otherwise `$HOME/.config/model-boss/config.json` |
+| PowerShell user configuration | `$HOME\.config\model-boss\config.json` unless an absolute `XDG_CONFIG_HOME` is supplied |
+| POSIX credentials | `$XDG_CONFIG_HOME/model-boss/credentials.json` when absolute; otherwise `$HOME/.config/model-boss/credentials.json` |
+| PowerShell credentials | `$HOME\.config\model-boss\credentials.json` unless an absolute `XDG_CONFIG_HOME` is supplied |
+| Explicit credentials override | `MODEL_BOSS_CREDENTIALS=<absolute path>` |
+| Child invocation manifest | `MODEL_BOSS_INVOCATION_MANIFEST` |
+| Trusted gate-failure packet | `MODEL_BOSS_TRUSTED_GATE_FAILURES` |
+| Example secret source | `MODEL_BOSS_PROVIDER_API_KEY` |
+| Invocation directory | `<temp-parent>/model-boss-invocation-<invocation-id>` |
+| Consumed receipt | `<temp-parent>/.model-boss-consumed-<invocation-id>.json` |
+| Sealed receipt | `<temp-parent>/.model-boss-sealed-<invocation-id>.json` |
+| Final sealed receipt | `<temp-parent>/.model-boss-sealed-final-<invocation-id>.json` |
+| Temporary files/directories | Existing purpose suffixes with a `model-boss-` or `.model-boss-` prefix |
+| Isolated worker Git ref | `refs/heads/model-boss-worker` |
+
+The runtime does not invent Windows roaming-profile conventions that it does not
+currently implement. All supported hosts use the same absolute-XDG-or-`HOME/.config`
+resolution rule, expressed with the platform's path separator.
 
 ## Migration boundary
 
@@ -78,6 +103,41 @@ This is a clean product rename, not a permanent dual-brand release.
 - GitHub's repository rename redirect covers old clone URLs, while canonical docs and
   the local `origin` use the new URL.
 
+Normal Model Boss discovery reads only `.model-boss.json`, the `model-boss` user
+configuration directory, `MODEL_BOSS_*` variables, and the new credentials path. It
+never silently reads an old path or environment variable.
+
+Credential migration is the one explicit compatibility operation. `setup-providers`
+may read a legacy non-symlink `providers.env` only when the user invokes that command
+or supplies `--legacy-source`; it writes a new `model-boss/credentials.json` with the
+existing atomic no-overwrite behavior, a private directory, and `0600` file mode on
+POSIX. If the Model Boss destination already exists, it returns `already_configured`
+and changes neither file. It never copies from `token-saver/credentials.json`
+automatically, never honors `TOKEN_SAVER_*` variables, never overwrites a destination,
+and never deletes or edits any legacy source. Users with an existing JSON credential
+file either keep using an explicit `MODEL_BOSS_CREDENTIALS` absolute path or copy it
+manually after verifying permissions.
+
+### Deterministic old-name audit
+
+The case-insensitive audit rejects `token-saver`, `token_saver`, `TOKEN_SAVER`,
+`Token Saver`, and `fable-token-saver` outside this exact allowlist:
+
+- `docs/superpowers/specs/2026-07-22-model-boss-rename-design.md`, because it defines
+  the migration boundary and mappings.
+- The superseded dated 2026-07-21 spec and plan, which remain immutable design history.
+- A single clearly titled migration section in each README and developer note.
+- The `SKILL.md` description and trigger evaluations that recognize requests to migrate
+  from either former name.
+- Credential-migration tests and implementation literals for the explicit legacy
+  `providers.env` source only.
+- Git history and packaged benchmark provenance that would become misleading if its
+  original recorded project label were rewritten.
+
+No active install command, canonical URL, help output, config example, schema ID, agent
+declaration, package manifest, runtime import, environment contract, or generated
+artifact is allowlisted.
+
 ## Documentation and artwork
 
 README files, SKILL instructions, references, agent prompts, examples, developer notes,
@@ -85,9 +145,12 @@ benchmarks, and generated help must introduce Model Boss consistently. The first
 of each README explains the Boss metaphor, then immediately states that the main loop is
 host-selected and immutable.
 
-The social card is regenerated around the Model Boss name and the Lite/Max hierarchy.
-It must avoid provider-specific branding and remain readable at GitHub social-preview
-size.
+The social card is regenerated at `1774 × 887` around the Model Boss name and the
+Lite/Max hierarchy. It must avoid provider-specific branding, show the product name and
+primary slogan without text artifacts, and remain legible when inspected at a
+`600 × 300` thumbnail. The repository description and topics use the new identity.
+The committed card is also uploaded as the GitHub social preview through the
+authenticated repository settings before release is declared complete.
 
 ## Verification and release
 
@@ -99,10 +162,15 @@ Implementation is complete only when all of the following hold:
 3. Unit, integration, sandbox, documentation, skill-validation, packaging,
    reproducibility, and extracted-bundle smoke tests pass.
 4. The new social card is visually inspected.
-5. The GitHub repository is renamed to `vincemakes/model-boss`, the local remote is
+5. Release preflight confirms a clean worktree, an absent local destination checkout,
+   availability of `vincemakes/model-boss`, authenticated repository-admin permission,
+   the expected `main` default branch, and permission to push, open, and merge a pull
+   request without bypassing branch protection.
+6. The GitHub repository is renamed to `vincemakes/model-boss`, the local remote is
    updated, `codex/model-boss` is pushed, a pull request is created and merged, and the
-   merged default branch is verified.
-6. The local checkout is renamed to `/Users/vinve/Desktop/devv/model-boss` only after
+   merged default branch plus repository description, topics, and social preview are
+   verified.
+7. The local checkout is renamed to `/Users/vinve/Desktop/devv/model-boss` only after
    all commands that depend on the old working directory have finished.
 
 Any failed verification stops release. Repository renaming, pushing, merging, and local
