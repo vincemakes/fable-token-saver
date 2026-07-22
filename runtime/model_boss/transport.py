@@ -24,7 +24,7 @@ from .models import (
     Status,
     Transport,
 )
-from .evidence import ApprovalBinding
+from .evidence import ApprovalBinding, PlanApprovalBinding
 from .process import ProcessResult, ProcessSpec, run_process
 from .sandbox import (
     SandboxPolicy,
@@ -175,11 +175,23 @@ def _canonical_packet(packet: bytes, expected_hash: str) -> bool:
     if not isinstance(value, dict) or canonical != packet:
         return False
     try:
-        binding = ApprovalBinding(
-            source_snapshot_hash=value["source_snapshot_hash"],
-            worker_delta_hash=value["worker_delta_hash"],
-            projected_task_patch_hash=value["projected_task_patch_hash"],
-        )
+        if value.get("purpose") == "plan-review":
+            binding = PlanApprovalBinding(
+                task_sha256=value["task_sha256"],
+                plan_context_sha256=value["plan_context_sha256"],
+                source_snapshot_hash=value["source_snapshot_hash"],
+                main_fingerprint=value["main_fingerprint"],
+                reviewer_route_id=value["reviewer_route_id"],
+                reviewer_fingerprint=value["reviewer_fingerprint"],
+                fingerprint_evidence_source=value["fingerprint_evidence_source"],
+                reviewer_read_only_enforced=value["reviewer_read_only_enforced"],
+            )
+        else:
+            binding = ApprovalBinding(
+                source_snapshot_hash=value["source_snapshot_hash"],
+                worker_delta_hash=value["worker_delta_hash"],
+                projected_task_patch_hash=value["projected_task_patch_hash"],
+            )
     except (KeyError, TypeError, ValueError):
         return False
     return (

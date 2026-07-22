@@ -13,17 +13,29 @@ from pathlib import Path
 from unittest import mock
 
 import runtime.model_boss.cli as cli_module
-from runtime.model_boss.bundle import SealedGateEvidence, seal_delta_bundle
+from runtime.model_boss.bundle import (
+    SealedGateEvidence,
+    build_plan_review_packet,
+    seal_delta_bundle,
+    seal_plan_review_receipt,
+)
 from runtime.model_boss.evidence import WorkerDelta
-from runtime.model_boss.models import Status
+from runtime.model_boss.models import (
+    FingerprintEvidenceSource,
+    ModelFingerprint,
+    RouteProbeResult,
+    Status,
+)
 from runtime.model_boss.repository import capture_source_snapshot
 from runtime.model_boss.resources import CleanupResult, create_invocation_resources
+from runtime.model_boss.transport import ReviewerTransportResult, ReviewerVerdict
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "model-boss.py"
 COMMANDS = (
     "resolve",
+    "plan-review",
     "review",
     "worker",
     "snapshot",
@@ -36,6 +48,290 @@ COMMANDS = (
 
 
 class CliTests(unittest.TestCase):
+    def _approved_plan(
+        self,
+        repository: Path,
+        temp_parent: Path,
+        task_path: Path,
+    ):
+        resources = create_invocation_resources(repository, temp_parent)
+        _, allowed_paths, canonical_task = cli_module._read_worker_task(task_path)
+        snapshot = capture_source_snapshot(repository, allowed_paths)
+        packet = build_plan_review_packet(
+            canonical_task,
+            snapshot,
+            {
+                "version": 1,
+                "goal": "perform the bounded task",
+                "proposed_plan": "change only the approved paths",
+                "acceptance_criteria": ["the gate passes"],
+                "risks": [],
+            },
+            invocation_id=resources.invocation_id,
+            main_fingerprint="example:balanced-v1:default",
+            reviewer_route_id="reviewer",
+            reviewer_fingerprint="example:authority-v1:default",
+            fingerprint_evidence_source="identity-handshake",
+            reviewer_read_only_enforced=True,
+        )
+        binding = json.loads(packet)["approval_binding_hash"]
+        seal_plan_review_receipt(
+            resources,
+            packet=packet,
+            decision="approve",
+            approval_binding_hash=binding,
+            reviewer_route_id="reviewer",
+            reviewer_fingerprint="example:authority-v1:default",
+            fingerprint_evidence_source="identity-handshake",
+            reviewer_read_only_enforced=True,
+            main_fingerprint="example:balanced-v1:default",
+            message="approved exact plan",
+            requested_changes=(),
+        )
+        return resources
+
+    def test_plan_review_and_worker_manifest_contract_is_explicit(self) -> None:
+        parser = cli_module.build_parser()
+        plan = parser.parse_args(
+            (
+                "plan-review",
+                "--repo",
+                "/repo",
+                "--temp-parent",
+                "/tmp/parent",
+                "--task",
+                "/tmp/task.json",
+                "--context",
+                "/tmp/context.json",
+                "--profile",
+                "/tmp/profile.json",
+                "--route",
+                "reviewer",
+                "--main-fingerprint",
+                "example:balanced-v1:default",
+            )
+        )
+        self.assertEqual(plan.command, "plan-review")
+        worker = parser.parse_args(
+            (
+                "worker",
+                "--repo",
+                "/repo",
+                "--temp-parent",
+                "/tmp/parent",
+                "--route",
+                "kimi",
+                "--task",
+                "/tmp/task.json",
+                "--mode",
+                "max",
+                "--manifest",
+                "/tmp/manifest.json",
+            )
+        )
+        self.assertEqual(worker.manifest, "/tmp/manifest.json")
+
+    def test_max_worker_fails_closed_on_task_or_source_mutation(self) -> None:
+        for mutation in ("task", "source"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as root_text:
+                root = Path(root_text)
+                repository = root / "repo"
+                repository.mkdir()
+                subprocess.run(("git", "-C", os.fspath(repository), "init", "-q"), check=True)
+                (repository / "allowed.txt").write_text("base\n", encoding="utf-8")
+                subprocess.run(("git", "-C", os.fspath(repository), "add", "allowed.txt"), check=True)
+                subprocess.run(
+                    (
+                        "git", "-C", os.fspath(repository), "-c", "user.name=Model Boss",
+                        "-c", "user.email=test@example.invalid", "commit", "-q", "-m", "base",
+                    ),
+                    check=True,
+                )
+                temp_parent = root / "tmp"
+                temp_parent.mkdir()
+                task_path = root / "task.json"
+                task_value = {
+                    "version": 1,
+                    "prompt": "change allowed.txt",
+                    "allowed_paths": ["allowed.txt"],
+                    "gates": [{"argv": ["true"], "cwd": ".", "timeout_seconds": 10}],
+                }
+                task_path.write_text(
+                    json.dumps(task_value, sort_keys=True, separators=(",", ":")),
+                    encoding="utf-8",
+                )
+                resources = self._approved_plan(repository, temp_parent, task_path)
+                if mutation == "task":
+                    task_value["prompt"] = "different task"
+                    task_path.write_text(
+                        json.dumps(task_value, sort_keys=True, separators=(",", ":")),
+                        encoding="utf-8",
+                    )
+                else:
+                    (repository / "allowed.txt").write_text("changed\n", encoding="utf-8")
+
+                result = self._run(
+                    "worker",
+                    "--repo", os.fspath(repository),
+                    "--temp-parent", os.fspath(temp_parent),
+                    "--route", "kimi",
+                    "--mode", "max",
+                    "--task", os.fspath(task_path),
+                    "--manifest", os.fspath(resources.manifest_path),
+                )
+
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertEqual(json.loads(result.stdout)["status"], "needs_context")
+                self.assertFalse(resources.invocation_root.exists())
+
+    def test_worker_manifest_is_required_only_for_max(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            repository = root / "repo"
+            repository.mkdir()
+            subprocess.run(("git", "-C", os.fspath(repository), "init", "-q"), check=True)
+            subprocess.run(
+                (
+                    "git", "-C", os.fspath(repository), "-c", "user.name=Model Boss",
+                    "-c", "user.email=test@example.invalid", "commit", "--allow-empty",
+                    "-q", "-m", "base",
+                ),
+                check=True,
+            )
+            temp_parent = root / "tmp"
+            temp_parent.mkdir()
+            task_path = root / "task.json"
+            task_path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "prompt": "create output",
+                        "allowed_paths": ["output.txt"],
+                        "gates": [{"argv": ["true"], "cwd": ".", "timeout_seconds": 10}],
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                encoding="utf-8",
+            )
+            unrelated = create_invocation_resources(repository, temp_parent)
+            lite = self._run(
+                "worker", "--repo", os.fspath(repository), "--temp-parent", os.fspath(temp_parent),
+                "--route", "kimi", "--mode", "lite", "--task", os.fspath(task_path),
+                "--manifest", os.fspath(unrelated.manifest_path),
+            )
+            maximum = self._run(
+                "worker", "--repo", os.fspath(repository), "--temp-parent", os.fspath(temp_parent),
+                "--route", "kimi", "--mode", "max", "--task", os.fspath(task_path),
+            )
+            self.assertEqual(lite.returncode, 2)
+            self.assertEqual(maximum.returncode, 2)
+            self.assertTrue(unrelated.manifest_path.exists())
+
+    def test_plan_revise_cleans_the_unapproved_invocation(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            repository = root / "repo"
+            repository.mkdir()
+            subprocess.run(("git", "-C", os.fspath(repository), "init", "-q"), check=True)
+            subprocess.run(
+                (
+                    "git", "-C", os.fspath(repository), "-c", "user.name=Model Boss",
+                    "-c", "user.email=test@example.invalid", "commit", "--allow-empty",
+                    "-q", "-m", "base",
+                ),
+                check=True,
+            )
+            temp_parent = root / "tmp"
+            temp_parent.mkdir()
+            task = root / "task.json"
+            task.write_text(
+                json.dumps(
+                    {
+                        "version": 1, "prompt": "create output",
+                        "allowed_paths": ["output.txt"],
+                        "gates": [{"argv": ["true"], "cwd": ".", "timeout_seconds": 10}],
+                    },
+                    sort_keys=True, separators=(",", ":"),
+                ),
+                encoding="utf-8",
+            )
+            context = root / "context.json"
+            context.write_text(
+                json.dumps(
+                    {
+                        "version": 1, "goal": "create output",
+                        "proposed_plan": "change output.txt",
+                        "acceptance_criteria": ["gate passes"], "risks": [],
+                    },
+                    sort_keys=True, separators=(",", ":"),
+                ),
+                encoding="utf-8",
+            )
+            profile = root / "profile.json"
+            profile.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1, "mode": "max",
+                        "routes": {
+                            "reviewer": {
+                                "transport": "external-cli", "band": "authority",
+                                "roles": ["reviewer"], "read_only": True,
+                                "provider_family": "example", "model": "authority-v1",
+                                "variant": "default", "command": [sys.executable],
+                            }
+                        },
+                        "preferences": {"reviewers": ["reviewer"], "workers": [], "scouts": [], "mechanics": []},
+                    },
+                    sort_keys=True, separators=(",", ":"),
+                ),
+                encoding="utf-8",
+            )
+            arguments = cli_module.build_parser().parse_args(
+                (
+                    "plan-review", "--repo", os.fspath(repository),
+                    "--temp-parent", os.fspath(temp_parent), "--task", os.fspath(task),
+                    "--context", os.fspath(context), "--profile", os.fspath(profile),
+                    "--route", "reviewer", "--main-fingerprint", "example:balanced-v1:default",
+                )
+            )
+            probe = RouteProbeResult(
+                route_id="reviewer", reachable=True,
+                resolved_fingerprint=ModelFingerprint("example", "authority-v1", "default"),
+                fingerprint_evidence_source=FingerprintEvidenceSource.IDENTITY_HANDSHAKE,
+                executable_available=True, native_agent_available=False,
+                reviewer_read_only_enforced=True,
+            )
+
+            def revise(_route, packet, binding_hash, **_kwargs):
+                return ReviewerTransportResult(
+                    Status.OK,
+                    ReviewerVerdict(
+                        version=1, decision="revise", approval_binding_hash=binding_hash,
+                        review_packet_sha256=__import__("hashlib").sha256(packet).hexdigest(),
+                        message="needs a narrower plan", requested_changes=("narrow scope",),
+                    ),
+                )
+
+            output = io.StringIO()
+            with (
+                mock.patch.object(cli_module, "probe_route", return_value=probe),
+                mock.patch.object(cli_module, "execute_reviewer", side_effect=revise),
+                redirect_stdout(output),
+            ):
+                code = cli_module._run_plan_review_command(arguments)
+
+            value = json.loads(output.getvalue())
+            self.assertEqual(code, 0)
+            self.assertEqual(value["decision"], "revise")
+            self.assertEqual(value["cleanup_status"], "cleaned")
+            leftovers = tuple(temp_parent.iterdir())
+            self.assertTrue(leftovers)
+            self.assertTrue(
+                all(path.name.startswith(".model-boss-consumed-") for path in leftovers)
+            )
+            self.assertFalse(any(path.name.startswith("model-boss-invocation-") for path in leftovers))
+
     def _run(
         self,
         *args: str,
@@ -370,6 +666,38 @@ class CliTests(unittest.TestCase):
             temp_parent.mkdir()
             resources = create_invocation_resources(repository, temp_parent)
             snapshot = capture_source_snapshot(repository, ())
+            plan_task = b'{"allowed_paths":["review.txt"],"gates":[{"argv":["true"],"cwd":".","timeout_seconds":10}],"prompt":"review no-op evidence","version":1}'
+            plan_packet = build_plan_review_packet(
+                plan_task,
+                snapshot,
+                {
+                    "version": 1,
+                    "goal": "verify the bounded review path",
+                    "proposed_plan": "review the exact sealed no-op patch",
+                    "acceptance_criteria": ["trusted gate is green"],
+                    "risks": [],
+                },
+                invocation_id=resources.invocation_id,
+                main_fingerprint="example:balanced-v1:default",
+                reviewer_route_id="external-reviewer",
+                reviewer_fingerprint="example:authority-v1:default",
+                fingerprint_evidence_source="identity-handshake",
+                reviewer_read_only_enforced=True,
+            )
+            plan_binding = json.loads(plan_packet)["approval_binding_hash"]
+            seal_plan_review_receipt(
+                resources,
+                packet=plan_packet,
+                decision="approve",
+                approval_binding_hash=plan_binding,
+                reviewer_route_id="external-reviewer",
+                reviewer_fingerprint="example:authority-v1:default",
+                fingerprint_evidence_source="identity-handshake",
+                reviewer_read_only_enforced=True,
+                main_fingerprint="example:balanced-v1:default",
+                message="approved exact plan",
+                requested_changes=(),
+            )
             seal_delta_bundle(
                 resources,
                 snapshot,
@@ -752,32 +1080,6 @@ class CliTests(unittest.TestCase):
                 "KIMI_BASE_URL": "https://kimi.invalid/",
                 "KIMI_AUTH_TOKEN": "test-secret",
             }
-
-            worker = self._run(
-                "worker",
-                "--repo",
-                os.fspath(repository),
-                "--temp-parent",
-                os.fspath(temp_parent),
-                "--route",
-                "kimi",
-                "--mode",
-                "max",
-                "--task",
-                os.fspath(task_path),
-                env=environment,
-            )
-
-            self.assertEqual(worker.returncode, 0, worker.stdout + worker.stderr)
-            worker_value = json.loads(worker.stdout)
-            self.assertEqual(worker_value["status"], "ok")
-            self.assertEqual(worker_value["mode"], "max")
-            self.assertEqual(worker_value["attempts"], 2)
-            self.assertTrue(all(gate["status"] == "ok" for gate in worker_value["gates"]))
-            self.assertFalse((repository / "output.txt").exists())
-            manifest_path = Path(worker_value["manifest"])
-            self.assertTrue(manifest_path.is_file())
-            self.assertTrue(Path(worker_value["bundle"]).is_file())
             reviewer = fake_bin / "reviewer"
             identity = {
                 "provider_family": "example",
@@ -796,7 +1098,7 @@ class CliTests(unittest.TestCase):
                 "        'version': 1, 'decision': 'approve',\n"
                 "        'approval_binding_hash': value['approval_binding_hash'],\n"
                 "        'review_packet_sha256': hashlib.sha256(raw).hexdigest(),\n"
-                "        'message': 'approved sealed worker output',\n"
+                "        'message': 'approved exact evidence',\n"
                 "        'requested_changes': [],\n"
                 "    }\n"
                 "    sys.stdout.write(json.dumps(result, sort_keys=True, separators=(',', ':')))\n",
@@ -834,6 +1136,71 @@ class CliTests(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
+            plan_context = root / "plan-context.json"
+            plan_context.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "goal": "create the bounded output",
+                        "proposed_plan": "delegate output.txt and run the exact gate",
+                        "acceptance_criteria": ["output.txt contains the worker result"],
+                        "risks": ["do not change tracked.txt"],
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                encoding="utf-8",
+            )
+            planned = self._run(
+                "plan-review",
+                "--repo",
+                os.fspath(repository),
+                "--temp-parent",
+                os.fspath(temp_parent),
+                "--task",
+                os.fspath(task_path),
+                "--context",
+                os.fspath(plan_context),
+                "--profile",
+                os.fspath(profile),
+                "--route",
+                "reviewer",
+                "--main-fingerprint",
+                "example:balanced-v1:default",
+                env=environment,
+            )
+            self.assertEqual(planned.returncode, 0, planned.stdout + planned.stderr)
+            plan_value = json.loads(planned.stdout)
+            self.assertEqual(plan_value["decision"], "approve")
+            plan_manifest = Path(plan_value["manifest"])
+
+            worker = self._run(
+                "worker",
+                "--repo",
+                os.fspath(repository),
+                "--temp-parent",
+                os.fspath(temp_parent),
+                "--route",
+                "kimi",
+                "--mode",
+                "max",
+                "--task",
+                os.fspath(task_path),
+                "--manifest",
+                os.fspath(plan_manifest),
+                env=environment,
+            )
+
+            self.assertEqual(worker.returncode, 0, worker.stdout + worker.stderr)
+            worker_value = json.loads(worker.stdout)
+            self.assertEqual(worker_value["status"], "ok")
+            self.assertEqual(worker_value["mode"], "max")
+            self.assertEqual(worker_value["attempts"], 2)
+            self.assertTrue(all(gate["status"] == "ok" for gate in worker_value["gates"]))
+            self.assertFalse((repository / "output.txt").exists())
+            manifest_path = Path(worker_value["manifest"])
+            self.assertTrue(manifest_path.is_file())
+            self.assertTrue(Path(worker_value["bundle"]).is_file())
             context = root / "review-context.json"
             context.write_text(
                 json.dumps(
@@ -849,6 +1216,33 @@ class CliTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+
+            mismatched_profile = root / "mismatched-review-profile.json"
+            mismatched_value = json.loads(profile.read_text(encoding="utf-8"))
+            mismatched_value["routes"]["other-reviewer"] = dict(
+                mismatched_value["routes"]["reviewer"]
+            )
+            mismatched_value["preferences"]["reviewers"] = ["other-reviewer"]
+            mismatched_profile.write_text(
+                json.dumps(mismatched_value, sort_keys=True, separators=(",", ":")),
+                encoding="utf-8",
+            )
+            mismatched = self._run(
+                "review",
+                "--profile",
+                os.fspath(mismatched_profile),
+                "--route",
+                "other-reviewer",
+                "--main-fingerprint",
+                "example:balanced-v1:default",
+                "--manifest",
+                os.fspath(manifest_path),
+                "--context",
+                os.fspath(context),
+                env=environment,
+            )
+            self.assertEqual(mismatched.returncode, 3)
+            self.assertEqual(json.loads(mismatched.stdout)["status"], "reviewer_unavailable")
 
             reviewed = self._run(
                 "review",

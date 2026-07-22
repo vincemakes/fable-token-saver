@@ -31,6 +31,7 @@ from . import resources as resources_module
 from .evidence import (
     ApprovalBinding,
     EvidenceRecord,
+    PlanApprovalBinding,
     PrivateRecord,
     SourceSnapshot,
     WorkerDelta,
@@ -277,6 +278,56 @@ class FinalReviewReceipt:
         if not all(isinstance(change, str) and change.strip() for change in changes):
             raise ValueError("requested_changes must contain non-empty text")
         object.__setattr__(self, "requested_changes", changes)
+
+
+@dataclass(frozen=True)
+class PlanReviewReceipt:
+    """One immutable Max plan approval bound to the pre-dispatch invocation."""
+
+    schema_version: int
+    invocation_id: str
+    task_sha256: str
+    plan_context_sha256: str
+    plan_packet_sha256: str
+    source_snapshot_hash: str
+    approval_binding_hash: str
+    decision: str
+    reviewer_route_id: str
+    reviewer_fingerprint: str
+    fingerprint_evidence_source: str
+    reviewer_read_only_enforced: bool
+    main_fingerprint: str
+    message: str
+    requested_changes: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if self.schema_version != 1:
+            raise ValueError("unsupported plan review receipt version")
+        binding = PlanApprovalBinding(
+            task_sha256=self.task_sha256,
+            plan_context_sha256=self.plan_context_sha256,
+            source_snapshot_hash=self.source_snapshot_hash,
+            main_fingerprint=self.main_fingerprint,
+            reviewer_route_id=self.reviewer_route_id,
+            reviewer_fingerprint=self.reviewer_fingerprint,
+            fingerprint_evidence_source=self.fingerprint_evidence_source,
+            reviewer_read_only_enforced=self.reviewer_read_only_enforced,
+        )
+        if binding.canonical_hash != self.approval_binding_hash:
+            raise ValueError("plan review receipt binding hash is inconsistent")
+        if _SHA256_RE.fullmatch(self.plan_packet_sha256) is None:
+            raise ValueError("plan_packet_sha256 must be a lower-case SHA-256 digest")
+        if not isinstance(self.invocation_id, str) or not self.invocation_id.strip():
+            raise ValueError("invocation_id must be non-empty text")
+        if self.decision != "approve" or self.requested_changes:
+            raise ValueError("only an approval without requested changes can be sealed")
+        if (
+            not isinstance(self.message, str)
+            or not self.message.strip()
+            or "\0" in self.message
+        ):
+            raise ValueError("message must be non-empty safe text")
+        object.__setattr__(self, "requested_changes", tuple(self.requested_changes))
 
 
 def _canonical_json(value: object) -> bytes:
@@ -1575,6 +1626,180 @@ def read_sealed_delta_bundle(resources: InvocationResources) -> SealedDeltaBundl
     )
 
 
+_PLAN_CONTEXT_KEYS = frozenset(
+    {"acceptance_criteria", "goal", "proposed_plan", "risks", "version"}
+)
+_PLAN_RECEIPT_KEYS = frozenset(
+    {
+        "approval_binding_hash",
+        "decision",
+        "fingerprint_evidence_source",
+        "invocation_id",
+        "main_fingerprint",
+        "message",
+        "plan_context_sha256",
+        "plan_packet_sha256",
+        "requested_changes",
+        "reviewer_fingerprint",
+        "reviewer_read_only_enforced",
+        "reviewer_route_id",
+        "schema_version",
+        "source_snapshot_hash",
+        "task_sha256",
+    }
+)
+
+
+def _bounded_text(value: object, label: str, *, maximum: int = 65_536) -> str:
+    text = _expect_string(value, label)
+    if not text.strip() or "\0" in text or len(text) > maximum:
+        raise BundleError(f"{label} is invalid")
+    return text
+
+
+def _bounded_text_list(
+    value: object,
+    label: str,
+    *,
+    allow_empty: bool,
+) -> list[str]:
+    items = _expect_list(value, label)
+    if (
+        (not allow_empty and not items)
+        or len(items) > 256
+        or not all(
+            type(item) is str
+            and bool(item.strip())
+            and "\0" not in item
+            and len(item) <= 16_384
+            for item in items
+        )
+    ):
+        raise BundleError(f"{label} is invalid")
+    return list(items)  # type: ignore[return-value]
+
+
+def _plan_context(value: object) -> dict[str, object]:
+    context = _expect_keys(value, _PLAN_CONTEXT_KEYS, "plan review context")
+    if _expect_integer(context["version"], "plan review context version") != 1:
+        raise BundleError("plan review context version is unsupported")
+    return {
+        "acceptance_criteria": _bounded_text_list(
+            context["acceptance_criteria"],
+            "plan review context.acceptance_criteria",
+            allow_empty=False,
+        ),
+        "goal": _bounded_text(context["goal"], "plan review context.goal"),
+        "proposed_plan": _bounded_text(
+            context["proposed_plan"], "plan review context.proposed_plan"
+        ),
+        "risks": _bounded_text_list(
+            context["risks"],
+            "plan review context.risks",
+            allow_empty=True,
+        ),
+        "version": 1,
+    }
+
+
+def build_plan_review_packet(
+    canonical_task: bytes,
+    snapshot: SourceSnapshot,
+    context: object,
+    *,
+    invocation_id: str,
+    main_fingerprint: str,
+    reviewer_route_id: str,
+    reviewer_fingerprint: str,
+    fingerprint_evidence_source: str,
+    reviewer_read_only_enforced: bool,
+) -> bytes:
+    """Build the canonical packet approved before any Max worker launch."""
+
+    if type(canonical_task) is not bytes or not canonical_task:
+        raise BundleError("canonical task is invalid")
+    task_value = _decode_json(canonical_task)
+    if set(task_value) != {"allowed_paths", "gates", "prompt", "version"}:
+        raise BundleError("canonical task has an invalid schema")
+    canonical_context = _plan_context(context)
+    context_raw = _canonical_json(canonical_context)
+    source_hash = hashlib.sha256(encode_source_snapshot(snapshot)).hexdigest()
+    binding = PlanApprovalBinding(
+        task_sha256=hashlib.sha256(canonical_task).hexdigest(),
+        plan_context_sha256=hashlib.sha256(context_raw).hexdigest(),
+        source_snapshot_hash=source_hash,
+        main_fingerprint=main_fingerprint,
+        reviewer_route_id=reviewer_route_id,
+        reviewer_fingerprint=reviewer_fingerprint,
+        fingerprint_evidence_source=fingerprint_evidence_source,
+        reviewer_read_only_enforced=reviewer_read_only_enforced,
+    )
+    if not isinstance(invocation_id, str) or not invocation_id.strip() or "\0" in invocation_id:
+        raise BundleError("invocation_id is invalid")
+    return _canonical_json(
+        {
+            "acceptance_and_plan": canonical_context,
+            "approval_binding_hash": binding.canonical_hash,
+            "fingerprint_evidence_source": binding.fingerprint_evidence_source,
+            "invocation_id": invocation_id,
+            "main_fingerprint": binding.main_fingerprint,
+            "plan_context_sha256": binding.plan_context_sha256,
+            "private_scope_summary": {
+                "aggregate_hash": snapshot.private_summary.aggregate_hash,
+                "status_counts": [
+                    [int(status), count]
+                    for status, count in snapshot.private_summary.status_counts
+                ],
+            },
+            "purpose": "plan-review",
+            "reviewer_fingerprint": binding.reviewer_fingerprint,
+            "reviewer_read_only_enforced": binding.reviewer_read_only_enforced,
+            "reviewer_route_id": binding.reviewer_route_id,
+            "source_snapshot_hash": binding.source_snapshot_hash,
+            "task": task_value,
+            "task_sha256": binding.task_sha256,
+            "version": 1,
+        }
+    )
+
+
+def _validate_plan_review_packet(packet: bytes, resources: InvocationResources) -> PlanApprovalBinding:
+    if type(packet) is not bytes or not packet or len(packet) > MAX_BUNDLE_BYTES:
+        raise BundleError("plan review packet is invalid or too large")
+    value = _decode_json(packet)
+    if value.get("purpose") != "plan-review" or value.get("version") != 1:
+        raise BundleError("plan review packet purpose is invalid")
+    if value.get("invocation_id") != resources.invocation_id:
+        raise BundleError("plan review packet does not bind this invocation")
+    task = _expect_object(value.get("task"), "plan review task")
+    context = _plan_context(value.get("acceptance_and_plan"))
+    binding = PlanApprovalBinding(
+        task_sha256=_expect_sha256(value.get("task_sha256"), "task_sha256"),
+        plan_context_sha256=_expect_sha256(
+            value.get("plan_context_sha256"), "plan_context_sha256"
+        ),
+        source_snapshot_hash=_expect_sha256(
+            value.get("source_snapshot_hash"), "source_snapshot_hash"
+        ),
+        main_fingerprint=_expect_string(value.get("main_fingerprint"), "main_fingerprint"),
+        reviewer_route_id=_expect_string(value.get("reviewer_route_id"), "reviewer_route_id"),
+        reviewer_fingerprint=_expect_string(
+            value.get("reviewer_fingerprint"), "reviewer_fingerprint"
+        ),
+        fingerprint_evidence_source=_expect_string(
+            value.get("fingerprint_evidence_source"), "fingerprint_evidence_source"
+        ),
+        reviewer_read_only_enforced=value.get("reviewer_read_only_enforced"),  # type: ignore[arg-type]
+    )
+    if hashlib.sha256(_canonical_json(task)).hexdigest() != binding.task_sha256:
+        raise BundleError("plan review packet task hash is inconsistent")
+    if hashlib.sha256(_canonical_json(context)).hexdigest() != binding.plan_context_sha256:
+        raise BundleError("plan review packet context hash is inconsistent")
+    if value.get("approval_binding_hash") != binding.canonical_hash:
+        raise BundleError("plan review packet binding hash is inconsistent")
+    return binding
+
+
 _FINAL_CONTEXT_KEYS = frozenset(
     {"acceptance_criteria", "approved_plan", "goal", "main_loop_verdict", "version"}
 )
@@ -1660,6 +1885,8 @@ def _review_file_manifest(section: str, records: tuple[EvidenceRecord, ...]) -> 
 def build_final_review_packet(
     bundle: SealedDeltaBundle,
     context: object,
+    *,
+    plan_receipt: PlanReviewReceipt | None = None,
 ) -> bytes:
     """Build the complete reviewer-visible packet from one validated sealed bundle."""
 
@@ -1667,6 +1894,13 @@ def build_final_review_packet(
         raise BundleError("final review requires a sealed delta bundle")
     if not bundle.gates:
         raise BundleError("final review requires persisted trusted gate evidence")
+    if bundle.authority_mode == "max":
+        if not isinstance(plan_receipt, PlanReviewReceipt):
+            raise BundleError("Max final review requires the approved plan receipt")
+        if plan_receipt.source_snapshot_hash != bundle.metadata.source_snapshot_hash:
+            raise BundleError("approved plan does not bind the sealed source snapshot")
+    elif plan_receipt is not None:
+        raise BundleError("Lite final review cannot carry a Max plan receipt")
     canonical_context = _final_context(context)
     patch = project_task_patch(bundle.snapshot, bundle.delta)
     binding = ApprovalBinding(
@@ -1701,6 +1935,12 @@ def build_final_review_packet(
             section: [_encode_record(record) for record in records]
             for section, records in sections
         },
+        "plan_approval_binding_hash": (
+            plan_receipt.approval_binding_hash if plan_receipt is not None else None
+        ),
+        "plan_review_packet_sha256": (
+            plan_receipt.plan_packet_sha256 if plan_receipt is not None else None
+        ),
         "private_scope_summary": {
             "aggregate_hash": patch.private_summary.aggregate_hash,
             "status_counts": [
@@ -1720,6 +1960,7 @@ def build_final_review_packet(
 def _validate_final_review_packet(
     packet: bytes,
     bundle: SealedDeltaBundle,
+    plan_receipt: PlanReviewReceipt | None,
 ) -> str:
     if type(packet) is not bytes or not packet or len(packet) > MAX_BUNDLE_BYTES * 3:
         raise BundleError("final review packet is invalid or too large")
@@ -1733,6 +1974,12 @@ def _validate_final_review_packet(
         "authority_mode": bundle.authority_mode,
         "bundle_sha256": bundle.metadata.bundle_sha256,
         "invocation_id": bundle.metadata.invocation_id,
+        "plan_approval_binding_hash": (
+            plan_receipt.approval_binding_hash if plan_receipt is not None else None
+        ),
+        "plan_review_packet_sha256": (
+            plan_receipt.plan_packet_sha256 if plan_receipt is not None else None
+        ),
         "projected_task_patch_hash": bundle.metadata.projected_task_patch_hash,
         "purpose": "final-review",
         "source_snapshot_hash": bundle.metadata.source_snapshot_hash,
@@ -1771,6 +2018,185 @@ def _open_evidence_anchor(anchor: object, resources: InvocationResources) -> int
     except BaseException:
         os.close(descriptor)
         raise
+
+
+def _plan_receipt_payload(receipt: PlanReviewReceipt) -> dict[str, object]:
+    return {
+        "approval_binding_hash": receipt.approval_binding_hash,
+        "decision": receipt.decision,
+        "fingerprint_evidence_source": receipt.fingerprint_evidence_source,
+        "invocation_id": receipt.invocation_id,
+        "main_fingerprint": receipt.main_fingerprint,
+        "message": receipt.message,
+        "plan_context_sha256": receipt.plan_context_sha256,
+        "plan_packet_sha256": receipt.plan_packet_sha256,
+        "requested_changes": list(receipt.requested_changes),
+        "reviewer_fingerprint": receipt.reviewer_fingerprint,
+        "reviewer_read_only_enforced": receipt.reviewer_read_only_enforced,
+        "reviewer_route_id": receipt.reviewer_route_id,
+        "schema_version": receipt.schema_version,
+        "source_snapshot_hash": receipt.source_snapshot_hash,
+        "task_sha256": receipt.task_sha256,
+    }
+
+
+def _plan_receipt_from_value(value: object) -> PlanReviewReceipt:
+    receipt = _expect_keys(value, _PLAN_RECEIPT_KEYS, "plan review receipt")
+    changes = _expect_list(receipt["requested_changes"], "requested_changes")
+    if not all(type(change) is str for change in changes):
+        raise BundleError("requested_changes must contain only strings")
+    try:
+        return PlanReviewReceipt(
+            schema_version=_expect_integer(receipt["schema_version"], "schema_version"),
+            invocation_id=_expect_string(receipt["invocation_id"], "invocation_id"),
+            task_sha256=_expect_sha256(receipt["task_sha256"], "task_sha256"),
+            plan_context_sha256=_expect_sha256(
+                receipt["plan_context_sha256"], "plan_context_sha256"
+            ),
+            plan_packet_sha256=_expect_sha256(
+                receipt["plan_packet_sha256"], "plan_packet_sha256"
+            ),
+            source_snapshot_hash=_expect_sha256(
+                receipt["source_snapshot_hash"], "source_snapshot_hash"
+            ),
+            approval_binding_hash=_expect_sha256(
+                receipt["approval_binding_hash"], "approval_binding_hash"
+            ),
+            decision=_expect_string(receipt["decision"], "decision"),
+            reviewer_route_id=_expect_string(
+                receipt["reviewer_route_id"], "reviewer_route_id"
+            ),
+            reviewer_fingerprint=_expect_string(
+                receipt["reviewer_fingerprint"], "reviewer_fingerprint"
+            ),
+            fingerprint_evidence_source=_expect_string(
+                receipt["fingerprint_evidence_source"],
+                "fingerprint_evidence_source",
+            ),
+            reviewer_read_only_enforced=receipt["reviewer_read_only_enforced"],  # type: ignore[arg-type]
+            main_fingerprint=_expect_string(
+                receipt["main_fingerprint"], "main_fingerprint"
+            ),
+            message=_expect_string(receipt["message"], "message"),
+            requested_changes=tuple(changes),  # type: ignore[arg-type]
+        )
+    except ValueError as exc:
+        raise BundleError(f"plan review receipt is invalid: {exc}") from exc
+
+
+def seal_plan_review_receipt(
+    resources: InvocationResources,
+    *,
+    packet: bytes,
+    decision: str,
+    approval_binding_hash: str,
+    reviewer_route_id: str,
+    reviewer_fingerprint: str,
+    fingerprint_evidence_source: str,
+    reviewer_read_only_enforced: bool,
+    main_fingerprint: str,
+    message: str,
+    requested_changes: tuple[str, ...] | list[str],
+) -> PlanReviewReceipt:
+    """Persist the immutable approval required before a Max worker can launch."""
+
+    binding = _validate_plan_review_packet(packet, resources)
+    if approval_binding_hash != binding.canonical_hash:
+        raise BundleError("review verdict does not bind the exact plan packet")
+    if (
+        reviewer_route_id != binding.reviewer_route_id
+        or reviewer_fingerprint != binding.reviewer_fingerprint
+        or fingerprint_evidence_source != binding.fingerprint_evidence_source
+        or reviewer_read_only_enforced != binding.reviewer_read_only_enforced
+        or main_fingerprint != binding.main_fingerprint
+    ):
+        raise BundleError("plan reviewer proof does not match the approved packet")
+    try:
+        receipt = PlanReviewReceipt(
+            schema_version=1,
+            invocation_id=resources.invocation_id,
+            task_sha256=binding.task_sha256,
+            plan_context_sha256=binding.plan_context_sha256,
+            plan_packet_sha256=hashlib.sha256(packet).hexdigest(),
+            source_snapshot_hash=binding.source_snapshot_hash,
+            approval_binding_hash=approval_binding_hash,
+            decision=decision,
+            reviewer_route_id=reviewer_route_id,
+            reviewer_fingerprint=reviewer_fingerprint,
+            fingerprint_evidence_source=fingerprint_evidence_source,
+            reviewer_read_only_enforced=reviewer_read_only_enforced,
+            main_fingerprint=main_fingerprint,
+            message=message,
+            requested_changes=tuple(requested_changes),
+        )
+    except (TypeError, ValueError) as exc:
+        raise BundleError(f"plan review approval cannot be sealed: {exc}") from exc
+    raw = _canonical_json(_plan_receipt_payload(receipt))
+    descriptor: int | None = None
+    created: os.stat_result | None = None
+    evidence_fd: int | None = None
+    with _validated_root(resources) as anchor:
+        try:
+            evidence_fd = _open_evidence_anchor(anchor, resources)
+            descriptor, created = _create_receipt_at(
+                evidence_fd,
+                resources.plan_evidence_path.name,
+                raw,
+                final_mode=0o400,
+            )
+            os.close(descriptor)
+            descriptor = None
+            os.fsync(evidence_fd)
+            _validate_exact_layout(resources, anchor)
+        except FileExistsError as exc:
+            raise BundleAlreadySealedError(
+                "plan review receipt already exists; refusing to overwrite it"
+            ) from exc
+        except BundleError:
+            if evidence_fd is not None:
+                _unlink_created_file(
+                    evidence_fd, resources.plan_evidence_path.name, created
+                )
+            raise
+        except OSError as exc:
+            if evidence_fd is not None:
+                _unlink_created_file(
+                    evidence_fd, resources.plan_evidence_path.name, created
+                )
+            raise BundleError(f"plan review receipt could not be sealed: {exc}") from exc
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+            if evidence_fd is not None:
+                os.close(evidence_fd)
+    return receipt
+
+
+def read_plan_review_receipt(resources: InvocationResources) -> PlanReviewReceipt:
+    """Read the immutable Max pre-dispatch approval from its invocation."""
+
+    evidence_fd: int | None = None
+    descriptor: int | None = None
+    with _validated_root(resources) as anchor:
+        try:
+            evidence_fd = _open_evidence_anchor(anchor, resources)
+            descriptor, value, _ = _open_receipt_at(
+                evidence_fd,
+                resources.plan_evidence_path.name,
+                allowed_modes=frozenset({0o400}),
+            )
+            receipt = _plan_receipt_from_value(value)
+            if receipt.invocation_id != resources.invocation_id:
+                raise BundleError("plan review receipt does not bind this invocation")
+            _validate_exact_layout(resources, anchor)
+            return receipt
+        except FileNotFoundError as exc:
+            raise BundleError("invocation has no approved plan review receipt") from exc
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+            if evidence_fd is not None:
+                os.close(evidence_fd)
 
 
 def _receipt_from_value(value: object) -> FinalReviewReceipt:
@@ -1863,9 +2289,22 @@ def seal_final_review_receipt(
     """Persist the only public-CLI integration authority for one invocation."""
 
     bundle = read_sealed_delta_bundle(resources)
-    expected_binding = _validate_final_review_packet(packet, bundle)
+    plan_receipt = (
+        read_plan_review_receipt(resources)
+        if bundle.authority_mode == "max"
+        else None
+    )
+    expected_binding = _validate_final_review_packet(packet, bundle, plan_receipt)
     if approval_binding_hash != expected_binding:
         raise BundleError("review verdict does not bind the exact final packet")
+    if plan_receipt is not None and (
+        reviewer_route_id != plan_receipt.reviewer_route_id
+        or reviewer_fingerprint != plan_receipt.reviewer_fingerprint
+        or fingerprint_evidence_source != plan_receipt.fingerprint_evidence_source
+        or reviewer_read_only_enforced != plan_receipt.reviewer_read_only_enforced
+        or main_fingerprint != plan_receipt.main_fingerprint
+    ):
+        raise BundleError("final review must use the same approved plan reviewer")
     try:
         receipt = FinalReviewReceipt(
             schema_version=1,
@@ -1959,6 +2398,20 @@ def read_final_review_receipt(resources: InvocationResources) -> FinalReviewRece
                 != bundle.metadata.projected_task_patch_hash
             ):
                 raise BundleError("final review receipt does not bind this sealed bundle")
+            if bundle.authority_mode == "max":
+                plan_receipt = read_plan_review_receipt(resources)
+                if (
+                    receipt.reviewer_route_id != plan_receipt.reviewer_route_id
+                    or receipt.reviewer_fingerprint != plan_receipt.reviewer_fingerprint
+                    or receipt.fingerprint_evidence_source
+                    != plan_receipt.fingerprint_evidence_source
+                    or receipt.reviewer_read_only_enforced
+                    != plan_receipt.reviewer_read_only_enforced
+                    or receipt.main_fingerprint != plan_receipt.main_fingerprint
+                    or plan_receipt.source_snapshot_hash
+                    != bundle.metadata.source_snapshot_hash
+                ):
+                    raise BundleError("final receipt does not retain plan approval binding")
             _validate_exact_layout(resources, anchor)
             return receipt
         except FileNotFoundError as exc:
@@ -1978,14 +2431,18 @@ __all__ = (
     "BundleUnsupportedPlatformError",
     "DeltaBundleMetadata",
     "FinalReviewReceipt",
+    "PlanReviewReceipt",
     "MAX_BUNDLE_BYTES",
     "SCHEMA_VERSION",
     "SealedDeltaBundle",
     "SealedGateEvidence",
     "build_final_review_packet",
+    "build_plan_review_packet",
     "probe_bundle_capability",
     "read_final_review_receipt",
+    "read_plan_review_receipt",
     "read_sealed_delta_bundle",
     "seal_delta_bundle",
     "seal_final_review_receipt",
+    "seal_plan_review_receipt",
 )

@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from runtime.model_boss.evidence import ApprovalBinding
+from runtime.model_boss.evidence import ApprovalBinding, PlanApprovalBinding
 from runtime.model_boss.models import (
     CapabilityBand,
     ModelFingerprint,
@@ -51,6 +51,34 @@ PACKET = json.dumps(
     separators=(",", ":"),
 ).encode("ascii")
 PACKET_HASH = hashlib.sha256(PACKET).hexdigest()
+PLAN_BINDING_VALUE = PlanApprovalBinding(
+    task_sha256="4" * 64,
+    plan_context_sha256="5" * 64,
+    source_snapshot_hash="6" * 64,
+    main_fingerprint="example:balanced-v1:default",
+    reviewer_route_id="reviewer",
+    reviewer_fingerprint="example:authority-v1:default",
+    fingerprint_evidence_source="identity-handshake",
+    reviewer_read_only_enforced=True,
+)
+PLAN_BINDING = PLAN_BINDING_VALUE.canonical_hash
+PLAN_PACKET = json.dumps(
+    {
+        "version": 1,
+        "purpose": "plan-review",
+        "task_sha256": "4" * 64,
+        "plan_context_sha256": "5" * 64,
+        "source_snapshot_hash": "6" * 64,
+        "main_fingerprint": "example:balanced-v1:default",
+        "reviewer_route_id": "reviewer",
+        "reviewer_fingerprint": "example:authority-v1:default",
+        "fingerprint_evidence_source": "identity-handshake",
+        "reviewer_read_only_enforced": True,
+        "approval_binding_hash": PLAN_BINDING,
+    },
+    sort_keys=True,
+    separators=(",", ":"),
+).encode("ascii")
 
 
 def _route(command: tuple[str, ...]) -> Route:
@@ -94,6 +122,42 @@ def _verified_sandbox_factory(policy, *, route_id, argv, probe_parent=None):
 
 
 class ReviewerTransportTests(unittest.TestCase):
+    def test_plan_review_packet_uses_the_same_hardened_transport(self) -> None:
+        packet_hash = hashlib.sha256(PLAN_PACKET).hexdigest()
+        output = {
+            "version": 1,
+            "decision": "approve",
+            "approval_binding_hash": PLAN_BINDING,
+            "review_packet_sha256": packet_hash,
+            "message": "approved exact plan",
+            "requested_changes": [],
+        }
+        calls = []
+
+        def runner(spec):
+            calls.append(spec)
+            return _result(
+                json.dumps(output, sort_keys=True, separators=(",", ":")).encode()
+            )
+
+        with tempfile.TemporaryDirectory() as root:
+            parent = Path(root) / "parent"
+            state = Path(root) / "state"
+            parent.mkdir()
+            state.mkdir()
+            result = execute_reviewer(
+                _route((sys.executable,)),
+                PLAN_PACKET,
+                PLAN_BINDING,
+                evidence_parent=parent,
+                route_state_root=state,
+                process_runner=runner,
+                sandbox_factory=_verified_sandbox_factory,
+            )
+
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(len(calls), 1)
+
     def _run(self, command: tuple[str, ...], output: object, **kwargs):
         captured = []
 

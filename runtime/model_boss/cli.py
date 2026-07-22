@@ -22,10 +22,13 @@ from .bundle import (
     BundleError,
     SealedGateEvidence,
     build_final_review_packet,
+    build_plan_review_packet,
     read_final_review_receipt,
+    read_plan_review_receipt,
     read_sealed_delta_bundle,
     seal_delta_bundle,
     seal_final_review_receipt,
+    seal_plan_review_receipt,
 )
 from .config import ConfigError, load_config
 from .evidence import (
@@ -87,6 +90,7 @@ from .transport import execute_reviewer, probe_route
 CLI_VERSION = 1
 _COMMANDS = (
     "resolve",
+    "plan-review",
     "review",
     "worker",
     "snapshot",
@@ -98,6 +102,7 @@ _COMMANDS = (
 )
 _COMMAND_HELP = {
     "resolve": "resolve Lite/Max from explicit main-loop facts and live route probes",
+    "plan-review": "approve and seal the exact Max plan before worker dispatch",
     "review": "review one sealed bundle and persist an invocation-bound approval receipt",
     "worker": "run an OS-sandboxed external worker and seal its delta",
     "snapshot": "print a redacted diagnostic source-snapshot hash without persisting it",
@@ -959,6 +964,224 @@ def _run_snapshot_command(arguments: argparse.Namespace) -> int:
     return 0
 
 
+def _emit_plan_review_cleanup(
+    resources: InvocationResources,
+    status: Status,
+    *,
+    message: str,
+    fields: Mapping[str, object] | None = None,
+) -> int:
+    cleanup = cleanup_invocation(resources)
+    payload = dict(fields or {})
+    if not cleanup.cleaned:
+        print(
+            _json_output(
+                Status.TRANSPORT_ERROR,
+                plan_status=status.value,
+                cleanup_status=cleanup.status,
+                invocation_id=resources.invocation_id,
+                retained_manifest=os.fspath(resources.manifest_path),
+                message="plan review failed and invocation cleanup was rejected",
+                **payload,
+            )
+        )
+        return _status_exit_code(Status.TRANSPORT_ERROR)
+    print(
+        _json_output(
+            status,
+            cleanup_status=cleanup.status,
+            invocation_id=resources.invocation_id,
+            message=message,
+            **payload,
+        )
+    )
+    return _status_exit_code(status)
+
+
+def _run_plan_review_command(arguments: argparse.Namespace) -> int:
+    resources: InvocationResources | None = None
+    try:
+        repository = _canonical_directory(arguments.repo, "repository")
+        temp_parent = _canonical_directory(arguments.temp_parent, "temporary parent")
+        if _paths_overlap(repository, temp_parent):
+            raise ValueError("temporary parent overlaps repository")
+        _, allowed_paths, canonical_task = _read_worker_task(arguments.task)
+        context = _read_cli_json(arguments.context)
+        main_fingerprint = _parse_canonical_fingerprint(arguments.main_fingerprint)
+        profile = _profile_selection(arguments.profile)
+        loaded = load_config(
+            profile=profile,
+            project_root=repository,
+            discover=arguments.discover,
+        )
+        route = loaded.routes.get(arguments.route)
+        if route is None:
+            raise ValueError("reviewer route is not configured")
+        credential_document = _optional_credentials_document(arguments.credentials)
+        credentials, missing = _route_credentials(route, os.environ, credential_document)
+        if missing:
+            print(
+                _json_output(
+                    Status.PROVIDER_UNAVAILABLE,
+                    configured_credentials=sorted(credentials),
+                    missing_credentials=list(missing),
+                    message="reviewer credentials are unavailable",
+                )
+            )
+            return 3
+        probe = probe_route(
+            route,
+            Role.REVIEWER,
+            credentials,
+            select_verified_backend,
+            run_process,
+        )
+        main_loop = MainLoop(
+            route_id="host-main-loop",
+            fingerprint=main_fingerprint,
+            band=CapabilityBand.BALANCED,
+            host="plan-review-cli",
+        )
+        candidate = resolve_candidates(
+            main_loop,
+            loaded,
+            RunOverrides(mode=Mode.MAX, reviewer=route.route_id),
+        )
+        preflight = preflight_candidates(candidate, {route.route_id: probe})
+        resolution = finalize_resolution(candidate, preflight)
+        if resolution.status is not Status.OK:
+            print(
+                _json_output(
+                    resolution.status,
+                    facts=list(resolution.facts),
+                    message="distinct eligible reviewer did not pass live Max preflight",
+                )
+            )
+            return _status_exit_code(resolution.status)
+        if (
+            probe.resolved_fingerprint is None
+            or probe.fingerprint_evidence_source is None
+            or not probe.reviewer_read_only_enforced
+        ):
+            raise ValueError("reviewer proof is incomplete")
+        resources = create_invocation_resources(repository, temp_parent)
+        snapshot = capture_source_snapshot(repository, allowed_paths)
+        packet = build_plan_review_packet(
+            canonical_task,
+            snapshot,
+            context,
+            invocation_id=resources.invocation_id,
+            main_fingerprint=main_fingerprint.canonical,
+            reviewer_route_id=route.route_id,
+            reviewer_fingerprint=probe.resolved_fingerprint.canonical,
+            fingerprint_evidence_source=probe.fingerprint_evidence_source.value,
+            reviewer_read_only_enforced=probe.reviewer_read_only_enforced,
+        )
+        packet_value = json.loads(packet)
+        binding_hash = packet_value["approval_binding_hash"]
+        if not isinstance(binding_hash, str):
+            raise ValueError("plan packet binding is invalid")
+        with tempfile.TemporaryDirectory(
+            prefix="model-boss-plan-review-run-",
+            dir=temp_parent,
+        ) as root_text:
+            root = Path(root_text).resolve(strict=True)
+            root.chmod(0o700)
+            evidence_parent = root / "evidence-parent"
+            route_state = root / "route-state"
+            evidence_parent.mkdir(mode=0o700)
+            route_state.mkdir(mode=0o700)
+            result = execute_reviewer(
+                route,
+                packet,
+                binding_hash,
+                evidence_parent=evidence_parent,
+                route_state_root=route_state,
+                forbidden_roots=(repository,),
+                credentials=credentials,
+            )
+    except (
+        BundleError,
+        ConfigError,
+        OSError,
+        RepositoryError,
+        SetupError,
+        TypeError,
+        ValueError,
+    ):
+        if resources is not None:
+            return _emit_plan_review_cleanup(
+                resources,
+                Status.NEEDS_CONTEXT,
+                message="plan review inputs could not be validated safely",
+            )
+        print(
+            _json_output(
+                Status.NEEDS_CONTEXT,
+                message="plan review inputs could not be validated safely",
+            )
+        )
+        return 2
+    if result.status is not Status.OK or result.verdict is None:
+        assert resources is not None
+        return _emit_plan_review_cleanup(
+            resources,
+            result.status,
+            message=result.message,
+        )
+    if result.verdict.decision != "approve":
+        assert resources is not None
+        return _emit_plan_review_cleanup(
+            resources,
+            Status.OK,
+            message=result.verdict.message,
+            fields={
+                "decision": result.verdict.decision,
+                "requested_changes": list(result.verdict.requested_changes),
+                "review_packet_sha256": result.verdict.review_packet_sha256,
+            },
+        )
+    assert resources is not None
+    try:
+        receipt = seal_plan_review_receipt(
+            resources,
+            packet=packet,
+            decision=result.verdict.decision,
+            approval_binding_hash=result.verdict.approval_binding_hash,
+            reviewer_route_id=route.route_id,
+            reviewer_fingerprint=probe.resolved_fingerprint.canonical,
+            fingerprint_evidence_source=probe.fingerprint_evidence_source.value,
+            reviewer_read_only_enforced=probe.reviewer_read_only_enforced,
+            main_fingerprint=main_fingerprint.canonical,
+            message=result.verdict.message,
+            requested_changes=result.verdict.requested_changes,
+        )
+    except (BundleError, OSError, TypeError, ValueError):
+        return _emit_plan_review_cleanup(
+            resources,
+            Status.TRANSPORT_ERROR,
+            message="plan approval could not be sealed to the invocation",
+        )
+    print(
+        _json_output(
+            Status.OK,
+            mode=Mode.MAX.value,
+            authority=receipt.reviewer_route_id,
+            reviewer_fingerprint=receipt.reviewer_fingerprint,
+            decision=receipt.decision,
+            approval_binding_hash=receipt.approval_binding_hash,
+            review_packet_sha256=receipt.plan_packet_sha256,
+            plan_receipt=os.fspath(resources.plan_evidence_path),
+            manifest=os.fspath(resources.manifest_path),
+            source_snapshot_hash=receipt.source_snapshot_hash,
+            task_sha256=receipt.task_sha256,
+            message=receipt.message,
+            requested_changes=[],
+        )
+    )
+    return 0
+
+
 def _run_review_command(arguments: argparse.Namespace) -> int:
     try:
         resources = load_invocation_resources(Path(arguments.manifest))
@@ -966,13 +1189,33 @@ def _run_review_command(arguments: argparse.Namespace) -> int:
         temp_parent = resources.temp_parent
         context = _read_cli_json(arguments.context)
         sealed = read_sealed_delta_bundle(resources)
-        packet = build_final_review_packet(sealed, context)
+        plan_receipt = (
+            read_plan_review_receipt(resources)
+            if sealed.authority_mode == Mode.MAX.value
+            else None
+        )
+        packet = build_final_review_packet(
+            sealed,
+            context,
+            plan_receipt=plan_receipt,
+        )
         binding_hash = ApprovalBinding(
             source_snapshot_hash=sealed.metadata.source_snapshot_hash,
             worker_delta_hash=sealed.metadata.worker_delta_hash,
             projected_task_patch_hash=sealed.metadata.projected_task_patch_hash,
         ).canonical_hash
         main_fingerprint = _parse_canonical_fingerprint(arguments.main_fingerprint)
+        if (
+            plan_receipt is not None
+            and main_fingerprint.canonical != plan_receipt.main_fingerprint
+        ):
+            print(
+                _json_output(
+                    Status.REVIEWER_UNAVAILABLE,
+                    message="final review main loop differs from plan approval",
+                )
+            )
+            return _status_exit_code(Status.REVIEWER_UNAVAILABLE)
 
         if sealed.authority_mode == Mode.LITE.value:
             if (
@@ -1070,6 +1313,25 @@ def _run_review_command(arguments: argparse.Namespace) -> int:
                 )
             )
             return _status_exit_code(resolution.status)
+        if (
+            plan_receipt is None
+            or probe.resolved_fingerprint is None
+            or probe.fingerprint_evidence_source is None
+            or route.route_id != plan_receipt.reviewer_route_id
+            or probe.resolved_fingerprint.canonical
+            != plan_receipt.reviewer_fingerprint
+            or probe.fingerprint_evidence_source.value
+            != plan_receipt.fingerprint_evidence_source
+            or probe.reviewer_read_only_enforced
+            != plan_receipt.reviewer_read_only_enforced
+        ):
+            print(
+                _json_output(
+                    Status.REVIEWER_UNAVAILABLE,
+                    message="final review identity differs from plan approval",
+                )
+            )
+            return _status_exit_code(Status.REVIEWER_UNAVAILABLE)
 
         with tempfile.TemporaryDirectory(
             prefix="model-boss-review-run-",
@@ -1165,8 +1427,9 @@ def _run_review_command(arguments: argparse.Namespace) -> int:
     return 0
 
 
-def _parse_worker_task(path: str | os.PathLike[str]) -> tuple[WorkerTask, tuple[bytes, ...]]:
-    value = _read_cli_json(path)
+def _parse_worker_task_value(
+    value: dict[str, object],
+) -> tuple[WorkerTask, tuple[bytes, ...]]:
     if set(value) != {"version", "prompt", "allowed_paths", "gates"}:
         raise ValueError("worker task has an invalid schema")
     if type(value["version"]) is not int or value["version"] != 1:
@@ -1227,6 +1490,25 @@ def _parse_worker_task(path: str | os.PathLike[str]) -> tuple[WorkerTask, tuple[
         WorkerTask(prompt=prompt.encode("utf-8", "strict"), gates=tuple(gates)),
         tuple(encoded_paths),
     )
+
+
+def _read_worker_task(
+    path: str | os.PathLike[str],
+) -> tuple[WorkerTask, tuple[bytes, ...], bytes]:
+    value = _read_cli_json(path)
+    task, allowed_paths = _parse_worker_task_value(value)
+    canonical = json.dumps(
+        value,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("ascii")
+    return task, allowed_paths, canonical
+
+
+def _parse_worker_task(path: str | os.PathLike[str]) -> tuple[WorkerTask, tuple[bytes, ...]]:
+    task, allowed_paths, _ = _read_worker_task(path)
+    return task, allowed_paths
 
 
 _PROVIDER_WORKER_ALIASES = {
@@ -1320,12 +1602,34 @@ def _emit_provider_worker_failure(
 def _run_provider_worker_command(arguments: argparse.Namespace) -> int:
     resources: InvocationResources | None = None
     try:
-        task, allowed_paths = _parse_worker_task(arguments.task)
+        task, allowed_paths, canonical_task = _read_worker_task(arguments.task)
         provider_route, route = _provider_worker_route(arguments.route)
-        repository = Path(arguments.repo).resolve(strict=True)
-        temp_parent = Path(arguments.temp_parent).resolve(strict=True)
-        if not repository.is_dir() or not temp_parent.is_dir():
-            raise ValueError("worker roots must be directories")
+        repository = _canonical_directory(arguments.repo, "repository")
+        temp_parent = _canonical_directory(arguments.temp_parent, "temporary parent")
+        mode = Mode(arguments.mode)
+        if mode is Mode.LITE:
+            if arguments.manifest is not None:
+                raise ValueError("Lite worker creates its own invocation")
+            resources = create_invocation_resources(repository, temp_parent)
+            snapshot = capture_source_snapshot(repository, allowed_paths)
+        else:
+            if arguments.manifest is None:
+                raise ValueError("Max worker requires an approved plan manifest")
+            resources = load_invocation_resources(Path(arguments.manifest))
+            if (
+                resources.repository_path != repository
+                or resources.temp_parent != temp_parent
+            ):
+                raise ValueError("Max manifest roots do not match worker roots")
+            plan_receipt = read_plan_review_receipt(resources)
+            if plan_receipt.task_sha256 != hashlib.sha256(canonical_task).hexdigest():
+                raise ValueError("worker task does not match the approved plan")
+            snapshot = capture_source_snapshot(repository, allowed_paths)
+            if (
+                plan_receipt.source_snapshot_hash
+                != hashlib.sha256(encode_source_snapshot(snapshot)).hexdigest()
+            ):
+                raise ValueError("source changed after plan approval")
         environment = dict(os.environ)
         if arguments.credentials:
             credential_path = Path(arguments.credentials)
@@ -1342,8 +1646,6 @@ def _run_provider_worker_command(arguments: argparse.Namespace) -> int:
                 environment.pop(name, None)
             environment["MODEL_BOSS_CREDENTIALS"] = os.fspath(credential_path)
 
-        resources = create_invocation_resources(repository, temp_parent)
-        snapshot = capture_source_snapshot(repository, allowed_paths)
         handle = create_worktree(repository, snapshot, resources.worktree_path)
         materialize_snapshot(handle, snapshot)
         environment["MODEL_BOSS_INVOCATION_MANIFEST"] = os.fspath(
@@ -1947,6 +2249,16 @@ def build_parser() -> argparse.ArgumentParser:
             )
             child.add_argument("--reviewer")
             child.add_argument("--worker")
+        elif name == "plan-review":
+            child.add_argument("--repo", required=True)
+            child.add_argument("--temp-parent", required=True)
+            child.add_argument("--task", required=True)
+            child.add_argument("--context", required=True)
+            child.add_argument("--profile", required=True)
+            child.add_argument("--discover", action="store_true")
+            child.add_argument("--route", required=True)
+            child.add_argument("--main-fingerprint", required=True)
+            child.add_argument("--credentials")
         elif name == "review":
             child.add_argument("--inline", action="store_true")
             child.add_argument("--profile")
@@ -1984,6 +2296,7 @@ def build_parser() -> argparse.ArgumentParser:
                 required=True,
             )
             child.add_argument("--credentials")
+            child.add_argument("--manifest")
         elif name == "integrate":
             child.add_argument("manifest")
         elif name == "cleanup":
@@ -1999,6 +2312,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return int(exc.code)
     if arguments.command == "resolve":
         return _run_resolve_command(arguments)
+    if arguments.command == "plan-review":
+        return _run_plan_review_command(arguments)
     if arguments.command == "review":
         return _run_review_command(arguments)
     if arguments.command == "snapshot":

@@ -62,14 +62,17 @@ The external worker model tool allowlist is exactly `Read`, `Glob`, `Grep`, `Edi
 task's declared gate argument arrays after the model call. Gates are host operations,
 not shell capability exposed to the model.
 
-### One-shot worker command
+### One-shot sealed workflow
 
-`scripts/model-boss.py worker`, backed by `runtime.model_boss`, is the supported bridge
-from a Claude Code or Codex main loop to the Kimi/GLM bypass names. Calling a bypass
-wrapper from an ordinary checkout is intentionally refused. The worker command
-accepts an absolute repository, an existing temporary parent outside that repository,
-one of the documented provider route names, and a task JSON file with this exact
-schema:
+Resolve the directory containing `SKILL.md` for the installed skill and call it
+`<model-boss-skill-root>`. The installed
+`<model-boss-skill-root>/scripts/model-boss.py` entry point, backed by
+`runtime.model_boss`, is the supported bridge from a Claude Code or Codex main loop to
+the Kimi/GLM bypass names. Never assume that entry point exists relative to the target
+repository. Calling a bypass wrapper from an ordinary checkout is intentionally
+refused.
+
+The task JSON has this exact schema:
 
 ```json
 {
@@ -86,23 +89,41 @@ schema:
 }
 ```
 
-The task file contains direct argument arrays, never shell text or credentials. A
-successful call leaves one active manifest and sealed bundle for review. Invoke it
-from either a Claude Code or Codex main loop with a required mode:
+The task file contains direct argument arrays, never shell text or credentials. The
+sealed external CLI currently requires a worker invocation. Optional worker topologies
+apply to host-native orchestration, where the host can capture equivalent evidence
+without this bridge.
+
+For Max, create the invocation and obtain plan approval before dispatch. The plan
+context has exactly `version`, `goal`, `proposed_plan`, `acceptance_criteria`, and
+`risks`:
 
 ```bash
-python3 scripts/model-boss.py worker \
+python3 <model-boss-skill-root>/scripts/model-boss.py plan-review \
+  --repo /absolute/path/to/repository \
+  --temp-parent /absolute/path/to/existing-temp-parent \
+  --task /absolute/path/to/task.json \
+  --context /absolute/path/to/plan-context.json \
+  --profile /absolute/path/to/profile.json \
+  --route <reviewer-route> \
+  --main-fingerprint <provider:model:variant>
+
+python3 <model-boss-skill-root>/scripts/model-boss.py worker --manifest <manifest> \
   --repo /absolute/path/to/repository \
   --temp-parent /absolute/path/to/existing-temp-parent \
   --route claude-kimi-bypass \
   --task /absolute/path/to/task.json \
-  --mode lite
+  --mode max
 ```
 
-Use exactly one of `--mode lite` or `--mode max`. The worker seals that value as
-`authority_mode` in the bundle. It cannot switch, change, or downgrade later: Lite
-requires inline main-loop review, while Max requires a distinct external reviewer.
-Changing topology requires a new invocation.
+`plan-review` seals a private one-shot receipt that binds the canonical task, bounded
+plan context, source snapshot, main fingerprint, and distinct eligible reviewer. Max
+`worker --manifest` revalidates all of them before launching the worker. A revised
+plan, mutated task, changed source snapshot, missing receipt, or changed reviewer
+identity blocks dispatch and requires a new plan review.
+
+The worker seals `authority_mode=max` in the bundle. It cannot switch, change, or
+downgrade later. Changing topology requires a new invocation.
 
 Both review paths require a strict context JSON with this exact schema:
 
@@ -116,39 +137,49 @@ Both review paths require a strict context JSON with this exact schema:
 }
 ```
 
-In Lite, the already-selected main loop must reason about and review the complete
-sealed evidence before it records inline authority:
+After the main loop audits the complete sealed evidence, final Max review must use the
+same profile, route, resolved reviewer fingerprint, and main-loop fingerprint as plan
+review:
 
 ```bash
-python3 scripts/model-boss.py review --inline \
+python3 <model-boss-skill-root>/scripts/model-boss.py review \
+  --profile /absolute/path/to/same-profile.json \
+  --route <same-reviewer-route> \
+  --main-fingerprint <same-provider:model:variant> \
+  --manifest <manifest> \
+  --context /absolute/path/to/review-context.json
+
+python3 <model-boss-skill-root>/scripts/model-boss.py integrate <manifest>
+```
+
+Reviewer verdicts are only `approve` or `revise`. Missing context is a preflight or
+runtime `needs_context` status outside the verdict; a reviewer requests more work with
+`revise` and a non-empty requested-change list.
+
+For Lite, plan authority remains inline. The worker creates its own invocation and
+rejects `--manifest`; final authority is also inline:
+
+```bash
+python3 <model-boss-skill-root>/scripts/model-boss.py worker \
+  --repo /absolute/path/to/repository \
+  --temp-parent /absolute/path/to/existing-temp-parent \
+  --route claude-kimi-bypass \
+  --task /absolute/path/to/task.json \
+  --mode lite
+
+python3 <model-boss-skill-root>/scripts/model-boss.py review --inline \
   --main-fingerprint <provider:model:variant> \
   --manifest <manifest> \
   --context /absolute/path/to/review-context.json
+
+python3 <model-boss-skill-root>/scripts/model-boss.py integrate <manifest>
 ```
 
-In Max, the inherited main loop coordinates and audits, then a distinct verified
-external reviewer selected by profile and route owns both authority decisions. Max
-can still use an optional separate worker for implementation:
-
-```bash
-python3 scripts/model-boss.py review --profile /absolute/path/to/profile.json \
-  --route <reviewer-route> \
-  --main-fingerprint <provider:model:variant> \
-  --manifest <manifest> \
-  --context /absolute/path/to/review-context.json
-```
-
-An approving review persists an invocation-bound receipt containing the reviewer
-identity, sealed `authority_mode`, decision, and the exact
-`source_snapshot_hash`/`worker_delta_hash`/`projected_task_patch_hash` binding.
-Integration accepts only the manifest and reads that sealed receipt itself:
-
-```bash
-python3 scripts/model-boss.py integrate <manifest>
-```
-
-A missing, stale, wrong-mode, or invalid receipt blocks integration before the
-invocation is consumed.
+An approving final review persists an invocation-bound receipt containing the
+reviewer identity, sealed `authority_mode`, decision, exact plan binding for Max, and
+the `source_snapshot_hash`/`worker_delta_hash`/`projected_task_patch_hash` binding.
+Integration accepts only the manifest. A missing, stale, wrong-mode, swapped-plan, or
+invalid receipt blocks integration before the invocation is consumed.
 
 Verified external writer backends currently cover macOS and Linux, including Linux
 under WSL. Native Windows returns `sandbox_unavailable`; host-native Claude Code and

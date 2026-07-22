@@ -18,13 +18,17 @@ from runtime.model_boss.bundle import (
     BundleError,
     BundleTooLargeError,
     BundleUnsupportedPlatformError,
+    PlanReviewReceipt,
     SealedGateEvidence,
     build_final_review_packet,
+    build_plan_review_packet,
     probe_bundle_capability,
     read_final_review_receipt,
+    read_plan_review_receipt,
     read_sealed_delta_bundle,
     seal_delta_bundle,
     seal_final_review_receipt,
+    seal_plan_review_receipt,
 )
 from runtime.model_boss.evidence import (
     ApprovalBinding,
@@ -212,6 +216,197 @@ class BundleTestCase(unittest.TestCase):
 
 
 class BundleRoundTripTests(BundleTestCase):
+    def test_plan_review_receipt_is_one_shot_private_and_binding_complete(self) -> None:
+        task = b'{"allowed_paths":["task.txt"],"gates":[{"argv":["true"],"cwd":".","timeout_seconds":10}],"prompt":"change task.txt","version":1}'
+        packet = build_plan_review_packet(
+            task,
+            self.snapshot,
+            {
+                "version": 1,
+                "goal": "make the bounded change",
+                "proposed_plan": "change only task.txt and run the gate",
+                "acceptance_criteria": ["the gate passes"],
+                "risks": ["avoid unrelated files"],
+            },
+            invocation_id=self.resources.invocation_id,
+            main_fingerprint="example:balanced-v1:default",
+            reviewer_route_id="authority-reviewer",
+            reviewer_fingerprint="example:authority-v1:default",
+            fingerprint_evidence_source="identity-handshake",
+            reviewer_read_only_enforced=True,
+        )
+        packet_value = json.loads(packet)
+
+        created = seal_plan_review_receipt(
+            self.resources,
+            packet=packet,
+            decision="approve",
+            approval_binding_hash=packet_value["approval_binding_hash"],
+            reviewer_route_id="authority-reviewer",
+            reviewer_fingerprint="example:authority-v1:default",
+            fingerprint_evidence_source="identity-handshake",
+            reviewer_read_only_enforced=True,
+            main_fingerprint="example:balanced-v1:default",
+            message="approved exact plan",
+            requested_changes=(),
+        )
+
+        self.assertIsInstance(created, PlanReviewReceipt)
+        self.assertEqual(read_plan_review_receipt(self.resources), created)
+        self.assertEqual(created.task_sha256, _digest(task))
+        self.assertEqual(
+            created.source_snapshot_hash,
+            _digest(encode_source_snapshot(self.snapshot)),
+        )
+        self.assertEqual(
+            stat.S_IMODE(os.lstat(self.resources.plan_evidence_path).st_mode),
+            0o400,
+        )
+        with self.assertRaises(BundleAlreadySealedError):
+            seal_plan_review_receipt(
+                self.resources,
+                packet=packet,
+                decision="approve",
+                approval_binding_hash=packet_value["approval_binding_hash"],
+                reviewer_route_id="authority-reviewer",
+                reviewer_fingerprint="example:authority-v1:default",
+                fingerprint_evidence_source="identity-handshake",
+                reviewer_read_only_enforced=True,
+                main_fingerprint="example:balanced-v1:default",
+                message="second approval",
+                requested_changes=(),
+            )
+        self.resources.plan_evidence_path.chmod(0o600)
+        with self.assertRaisesRegex(BundleError, "mode"):
+            read_plan_review_receipt(self.resources)
+
+    def test_plan_review_packet_rejects_an_unbounded_context(self) -> None:
+        task = b'{"allowed_paths":["task.txt"],"gates":[{"argv":["true"],"cwd":".","timeout_seconds":10}],"prompt":"change task.txt","version":1}'
+        with self.assertRaisesRegex(BundleError, "plan review context"):
+            build_plan_review_packet(
+                task,
+                self.snapshot,
+                {
+                    "version": 1,
+                    "goal": "bounded goal",
+                    "proposed_plan": "bounded plan",
+                    "acceptance_criteria": ["done"],
+                    "risks": [],
+                    "unexpected": "not allowed",
+                },
+                invocation_id=self.resources.invocation_id,
+                main_fingerprint="example:balanced-v1:default",
+                reviewer_route_id="authority-reviewer",
+                reviewer_fingerprint="example:authority-v1:default",
+                fingerprint_evidence_source="identity-handshake",
+                reviewer_read_only_enforced=True,
+            )
+
+    def test_max_final_review_is_bound_to_the_same_plan_reviewer(self) -> None:
+        task = b'{"allowed_paths":["task.txt"],"gates":[{"argv":["true"],"cwd":".","timeout_seconds":10}],"prompt":"change task.txt","version":1}'
+        plan_packet = build_plan_review_packet(
+            task,
+            self.snapshot,
+            {
+                "version": 1,
+                "goal": "make the bounded change",
+                "proposed_plan": "change only task.txt",
+                "acceptance_criteria": ["the gate passes"],
+                "risks": [],
+            },
+            invocation_id=self.resources.invocation_id,
+            main_fingerprint="example:balanced-v1:default",
+            reviewer_route_id="authority-reviewer",
+            reviewer_fingerprint="example:authority-v1:default",
+            fingerprint_evidence_source="identity-handshake",
+            reviewer_read_only_enforced=True,
+        )
+        plan_value = json.loads(plan_packet)
+        plan_receipt = seal_plan_review_receipt(
+            self.resources,
+            packet=plan_packet,
+            decision="approve",
+            approval_binding_hash=plan_value["approval_binding_hash"],
+            reviewer_route_id="authority-reviewer",
+            reviewer_fingerprint="example:authority-v1:default",
+            fingerprint_evidence_source="identity-handshake",
+            reviewer_read_only_enforced=True,
+            main_fingerprint="example:balanced-v1:default",
+            message="approved exact plan",
+            requested_changes=(),
+        )
+        gate = SealedGateEvidence(
+            argv=("true",),
+            cwd=".",
+            status="ok",
+            exit_code=0,
+            stdout_hash="1" * 64,
+            stderr_hash="2" * 64,
+            duration_milliseconds=1,
+        )
+        seal_delta_bundle(
+            self.resources,
+            self.snapshot,
+            self.delta,
+            gates=(gate,),
+            authority_mode="max",
+        )
+        sealed = read_sealed_delta_bundle(self.resources)
+        final_packet = build_final_review_packet(
+            sealed,
+            {
+                "version": 1,
+                "goal": "make the bounded change",
+                "approved_plan": "change only task.txt",
+                "acceptance_criteria": ["the gate passes"],
+                "main_loop_verdict": "approve",
+            },
+            plan_receipt=plan_receipt,
+        )
+        self.assertEqual(
+            json.loads(final_packet)["plan_approval_binding_hash"],
+            plan_receipt.approval_binding_hash,
+        )
+
+        with self.assertRaisesRegex(BundleError, "plan reviewer"):
+            seal_final_review_receipt(
+                self.resources,
+                packet=final_packet,
+                decision="approve",
+                approval_binding_hash=ApprovalBinding(
+                    source_snapshot_hash=sealed.metadata.source_snapshot_hash,
+                    worker_delta_hash=sealed.metadata.worker_delta_hash,
+                    projected_task_patch_hash=sealed.metadata.projected_task_patch_hash,
+                ).canonical_hash,
+                reviewer_route_id="different-reviewer",
+                reviewer_fingerprint="example:other-authority:default",
+                fingerprint_evidence_source="identity-handshake",
+                reviewer_read_only_enforced=True,
+                main_fingerprint="example:balanced-v1:default",
+                message="wrong reviewer",
+                requested_changes=(),
+            )
+        seal_final_review_receipt(
+            self.resources,
+            packet=final_packet,
+            decision="approve",
+            approval_binding_hash=ApprovalBinding(
+                source_snapshot_hash=sealed.metadata.source_snapshot_hash,
+                worker_delta_hash=sealed.metadata.worker_delta_hash,
+                projected_task_patch_hash=sealed.metadata.projected_task_patch_hash,
+            ).canonical_hash,
+            reviewer_route_id=plan_receipt.reviewer_route_id,
+            reviewer_fingerprint=plan_receipt.reviewer_fingerprint,
+            fingerprint_evidence_source=plan_receipt.fingerprint_evidence_source,
+            reviewer_read_only_enforced=True,
+            main_fingerprint=plan_receipt.main_fingerprint,
+            message="approved exact final evidence",
+            requested_changes=(),
+        )
+        self.resources.plan_evidence_path.unlink()
+        with self.assertRaisesRegex(BundleError, "plan"):
+            read_final_review_receipt(self.resources)
+
     def test_round_trip_preserves_every_raw_field_and_binds_three_hashes(self) -> None:
         metadata = seal_delta_bundle(self.resources, self.snapshot, self.delta)
         sealed = read_sealed_delta_bundle(self.resources)
@@ -340,6 +535,38 @@ class BundleRoundTripTests(BundleTestCase):
         self.assertEqual(sealed.authority_mode, "max")
 
     def test_final_review_receipt_is_bound_to_packet_bundle_and_reviewer(self) -> None:
+        plan_task = b'{"allowed_paths":["task.txt"],"gates":[{"argv":["true"],"cwd":".","timeout_seconds":10}],"prompt":"change task.txt","version":1}'
+        plan_packet = build_plan_review_packet(
+            plan_task,
+            self.snapshot,
+            {
+                "version": 1,
+                "goal": "implement the bounded change",
+                "proposed_plan": "change only the allowed files",
+                "acceptance_criteria": ["the exact gate is green"],
+                "risks": [],
+            },
+            invocation_id=self.resources.invocation_id,
+            main_fingerprint="example:balanced-v1:default",
+            reviewer_route_id="authority-reviewer",
+            reviewer_fingerprint="example:authority-v1:default",
+            fingerprint_evidence_source="identity-handshake",
+            reviewer_read_only_enforced=True,
+        )
+        plan_value = json.loads(plan_packet)
+        plan_receipt = seal_plan_review_receipt(
+            self.resources,
+            packet=plan_packet,
+            decision="approve",
+            approval_binding_hash=plan_value["approval_binding_hash"],
+            reviewer_route_id="authority-reviewer",
+            reviewer_fingerprint="example:authority-v1:default",
+            fingerprint_evidence_source="identity-handshake",
+            reviewer_read_only_enforced=True,
+            main_fingerprint="example:balanced-v1:default",
+            message="approved exact plan",
+            requested_changes=(),
+        )
         gate = SealedGateEvidence(
             argv=("true",),
             cwd=".",
@@ -366,6 +593,7 @@ class BundleRoundTripTests(BundleTestCase):
                 "acceptance_criteria": ["the exact gate is green"],
                 "main_loop_verdict": "approve",
             },
+            plan_receipt=plan_receipt,
         )
 
         created = seal_final_review_receipt(

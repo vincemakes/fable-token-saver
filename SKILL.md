@@ -52,15 +52,18 @@ In Lite, the inherited main loop is the Boss and owns both AUTHORITY_PLAN_CHECK 
 AUTHORITY_FINAL_CHECK inline while continuing to coordinate and audit the run. A
 separate worker is optional.
 
-In Max, one eligible, verified external reviewer is the Boss and owns both authority
+In Max, one distinct eligible reviewer is the Boss and owns both authority
 checkpoints with a canonical fingerprint distinct from the main loop. The inherited
 main loop coordinates and audits the run. A separate worker is optional: Max may be
 two levels (main loop + reviewer) or three levels (main loop + reviewer + worker).
+That optional-worker topology applies to host-native orchestration. The sealed external
+CLI workflow currently requires a worker invocation so it can capture and bind a
+disposable-worktree delta.
 
 Require every sealed external-worker invocation to pass `worker --mode lite|max`.
 Seal its `authority_mode` into the bundle; it cannot switch, change, or downgrade for
 the lifetime of that invocation. Accept only `review --inline` for a Lite bundle and
-only an external `--profile` plus `--route` reviewer for a Max bundle. Starting a new
+only a distinct eligible `--profile` plus `--route` reviewer for a Max bundle. Starting a new
 topology requires a new worker invocation.
 
 ## 3. Eligibility and classification gate
@@ -137,48 +140,69 @@ loop, inline. Max binds both checkpoints to the same eligible reviewer with a di
 canonical fingerprint. The main loop still drafts, coordinates, performs its own
 review, and integrates; the reviewer never implements.
 
-## 4. Run the sealed worker, review, and integration
+## 4. Run plan approval, sealed work, final review, and integration
 
-Run an external worker with one immutable authority topology:
+Resolve the directory containing `SKILL.md` for the installed skill and call it
+`<model-boss-skill-root>`. Do not assume the target repository contains Model Boss or
+run a source-root-relative script path.
+
+The sealed Max CLI order is exact. The same profile, route, main fingerprint, and
+resolved reviewer identity must be used at plan and final review:
 
 ```bash
-python3 scripts/model-boss.py worker \
+python3 <model-boss-skill-root>/scripts/model-boss.py plan-review \
+  --repo <absolute-repository> \
+  --temp-parent <existing-absolute-temp-parent> \
+  --task <absolute-task.json> \
+  --context <absolute-plan-context.json> \
+  --profile <profile-or-path> \
+  --route <reviewer-route> \
+  --main-fingerprint <provider:model:variant>
+
+python3 <model-boss-skill-root>/scripts/model-boss.py worker --manifest <manifest> \
+  --repo <absolute-repository> \
+  --temp-parent <existing-absolute-temp-parent> \
+  --route <supported-worker-route> \
+  --task <absolute-task.json> \
+  --mode max
+
+python3 <model-boss-skill-root>/scripts/model-boss.py review \
+  --profile <same-profile-or-path> \
+  --route <same-reviewer-route> \
+  --main-fingerprint <same-provider:model:variant> \
+  --manifest <manifest> \
+  --context <absolute-review-context.json>
+
+python3 <model-boss-skill-root>/scripts/model-boss.py integrate <manifest>
+```
+
+`plan-review` accepts only a bounded context object with `version`, `goal`,
+`proposed_plan`, `acceptance_criteria`, and `risks`. It returns the manifest only after
+an immutable plan receipt binds that canonical context, the exact task, source
+snapshot, main loop, and distinct eligible reviewer. Max `worker` rejects a missing
+manifest and any task or source change before launch.
+
+For the sealed Lite CLI, the inherited main loop performs plan approval inline, the
+worker creates its own invocation, and no plan manifest is accepted:
+
+```bash
+python3 <model-boss-skill-root>/scripts/model-boss.py worker \
   --repo <absolute-repository> \
   --temp-parent <existing-absolute-temp-parent> \
   --route <supported-worker-route> \
   --task <absolute-task.json> \
   --mode lite
-```
 
-Use `--mode lite` when the inherited main loop owns both authority decisions inline;
-an optional separate worker may implement. Use `--mode max` when the inherited main
-loop coordinates and audits while a distinct verified external reviewer owns both
-authority decisions; an optional separate worker may implement.
-
-After the main loop reviews the sealed evidence and supplies the strict review-context
-JSON, use the review path that matches the sealed mode:
-
-```bash
-# Lite
-python3 scripts/model-boss.py review --inline \
+python3 <model-boss-skill-root>/scripts/model-boss.py review --inline \
   --main-fingerprint <provider:model:variant> \
   --manifest <manifest> \
   --context <absolute-review-context.json>
 
-# Max
-python3 scripts/model-boss.py review --profile <profile-or-path> \
-  --route <reviewer-route> \
-  --main-fingerprint <provider:model:variant> \
-  --manifest <manifest> \
-  --context <absolute-review-context.json>
+python3 <model-boss-skill-root>/scripts/model-boss.py integrate <manifest>
 ```
 
-An approving review seals the final-review receipt inside the invocation. Integrate
-only through that manifest; do not accept a caller-authored approval file:
-
-```bash
-python3 scripts/model-boss.py integrate <manifest>
-```
+An approving final review seals the receipt inside the invocation. Integration accepts
+only that manifest, never a caller-authored approval file.
 
 ## 5. Task packet
 
@@ -244,13 +268,14 @@ approve its own patch.
 
 ## 8. Max authority checkpoints
 
-In Max, the distinct reviewer receives evidence packets only. Plan review covers the
+In Max, the distinct eligible reviewer receives evidence packets only. Plan review covers the
 draft plan, acceptance criteria, risks, and scope before dispatch. Final review covers
 the approved plan, main-loop verdict, complete canonical patch, gate evidence, private
-scope manifest, and all three hashes. The reviewer returns structured `approve`,
-`revise`, or `needs_context` and echoes the binding hash. The review packet never
+scope manifest, and all three hashes. The reviewer verdict is only `approve` or
+`revise` and echoes the binding hash. Missing input is a preflight `needs_context`
+status; a reviewer that needs changes returns `revise` with requested changes. The review packet never
 contains credentials, and the reviewer never edits files or supplies implementation;
-an external reviewer client may still receive provider credentials at the process
+an external-CLI reviewer client may still receive provider credentials at the process
 boundary as described above.
 
 The same canonical reviewer must perform plan and final checkpoints. Identity or

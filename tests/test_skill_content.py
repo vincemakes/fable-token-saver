@@ -173,6 +173,42 @@ class SkillContentTests(unittest.TestCase):
         self.assertEqual(interface["display_name"], "Model Boss")
         self.assertIn("$model-boss", interface["default_prompt"])
 
+    def test_sealed_cli_documents_installed_root_and_max_plan_order(self) -> None:
+        external = (ROOT / "references" / "adapters" / "external-cli.md").read_text(
+            encoding="utf-8"
+        )
+        protocol = (ROOT / "references" / "protocol.md").read_text(encoding="utf-8")
+        for label, text in (("skill", self.body), ("external", external)):
+            with self.subTest(label=label):
+                self.assertNotIn("python3 scripts/model-boss.py", text)
+                self.assertIn("<model-boss-skill-root>/scripts/model-boss.py", text)
+                normalized = " ".join(text.lower().split())
+                self.assertRegex(
+                    normalized,
+                    r"directory containing [`']?skill\.md[`']?.{0,240}model-boss-skill-root",
+                )
+                plan = normalized.index("plan-review")
+                worker = normalized.index("worker --manifest", plan)
+                final = normalized.index("review", worker)
+                integrate = normalized.index("integrate", final)
+                self.assertLess(plan, worker)
+                self.assertLess(worker, final)
+                self.assertLess(final, integrate)
+        combined = " ".join((self.body + external + protocol).lower().split())
+        self.assertRegex(
+            combined,
+            r"optional worker.{0,260}host-native orchestration",
+        )
+        self.assertRegex(
+            combined,
+            r"sealed external cli.{0,220}requires.{0,120}worker invocation",
+        )
+        self.assertRegex(combined, r"verdict.{0,120}approve.{0,80}revise")
+        self.assertNotRegex(
+            combined,
+            r"`approve`\s*,?\s*`revise`\s*,?\s*(?:or|and)\s*`needs_context`",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

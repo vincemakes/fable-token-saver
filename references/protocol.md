@@ -16,8 +16,8 @@ normally.
 ## Authority topologies
 
 The Boss is the workflow authority holder. Lite assigns that authority to the
-inherited main loop inline. Max assigns it to one distinct, verified external
-reviewer while the inherited main loop coordinates and audits.
+inherited main loop inline. Max assigns it to one distinct eligible reviewer while
+the inherited main loop coordinates and audits.
 
 Lite is a two-level topology when a worker is used:
 
@@ -36,15 +36,17 @@ authority reviewer  <──plan/final evidence──  balanced main loop
                                                └── optional worker
 ```
 
-The optional worker may be omitted. This produces either two levels (reviewer + main
-loop) or three (reviewer + main loop + worker). The selected main loop never changes.
+The optional worker may be omitted in host-native orchestration. This produces either
+two levels (reviewer + main loop) or three (reviewer + main loop + worker). The sealed
+external CLI currently requires a worker invocation because its evidence contract is
+defined around a disposable-worktree delta. The selected main loop never changes.
 
 The resolved topology is not a cosmetic label. The worker entry seals an
 `authority_mode` of `lite` or `max` into the invocation-bound delta bundle. That
 field is covered by the bundle hash and external seal receipt, so the invocation
 cannot switch, downgrade, or upgrade authority paths after worker execution. A Lite
 bundle accepts only inline main-loop authority; a Max bundle accepts only a distinct
-external reviewer that passes the current identity and read-only preflight.
+eligible reviewer that passes the current identity and read-only preflight.
 
 ## State and checkpoint contract
 
@@ -59,6 +61,13 @@ RESOLVE -> PREFLIGHT -> CLASSIFY -> RECON -> DRAFT_PLAN
 `RECON` can record a no-op, but no state may disappear. Max plan approval precedes any
 dispatch. Final approval follows a complete patch audit and the main loop's own review.
 Lite executes those same two checkpoints inline.
+
+For the sealed external CLI, the executable Max order is `plan-review`, `worker
+--manifest`, final `review`, then `integrate`. Plan and final review must resolve the
+same reviewer route, canonical fingerprint, identity-evidence source, effective
+read-only enforcement, and main-loop fingerprint. Reviewer verdicts are only
+`approve` or `revise`; missing inputs produce a `needs_context` status outside the
+verdict, while requested work uses `revise` with a non-empty change list.
 
 ## Task packet schema
 
@@ -110,6 +119,22 @@ The runtime constructs that packet from the sealed bundle; callers cannot substi
 an arbitrary packet. It also binds `authority_mode`, invocation ID, sealed-bundle
 SHA-256, approval-binding hash, and all three evidence hashes. A reviewer verdict must
 echo both the approval-binding hash and the SHA-256 of the exact packet bytes.
+
+## Plan authority receipt
+
+Before Max dispatch, `plan-review` creates one private invocation and captures the
+source snapshot for the task's exact allowed paths. The canonical plan packet binds
+the invocation ID, canonical task hash, bounded plan-context hash, source-snapshot
+hash, main-loop fingerprint, reviewer route and fingerprint, identity-evidence source,
+and enforced read-only proof. An `approve` verdict creates the mode-0400
+`plan_evidence_path` exactly once. `revise`, transport failure, and malformed evidence
+clean the unapproved invocation and never leave an approvable manifest.
+
+Max `worker --manifest` safely reopens that receipt and rehashes the exact task and
+current source snapshot before any provider process launches. Final review uses the
+same plan receipt and reviewer identity, includes the plan binding in its packet, and
+integration revalidates the plan receipt again. Removing, replacing, weakening, or
+swapping plan evidence blocks both final approval and integration.
 
 ## Final authority receipt
 

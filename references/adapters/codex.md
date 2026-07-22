@@ -54,7 +54,7 @@ For a write-capable external worker, `worker --mode lite|max` is mandatory and s
 `authority_mode` into the bundle. It cannot switch later. A Lite bundle is reviewed
 with `review --inline --main-fingerprint ... --manifest ... --context ...`; a Max
 bundle is reviewed with external `--profile` and `--route` arguments. In Max, the
-inherited main loop coordinates and audits while a distinct verified reviewer owns
+inherited main loop coordinates and audits while a distinct eligible reviewer owns
 both authority checkpoints; an optional separate worker may implement. After an
 approving review, run `integrate <manifest>`; there is no separate approval-file
 argument.

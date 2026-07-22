@@ -7,6 +7,7 @@ encoding, and display rendering of raw Git paths is kept outside all hashed byte
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import struct
 from dataclasses import dataclass, field
@@ -536,6 +537,73 @@ class ApprovalBinding:
         return hashlib.sha256(encode_approval_binding(self)).hexdigest()
 
 
+@dataclass(frozen=True)
+class PlanApprovalBinding:
+    """The exact task, plan, source, and reviewer identity approved before Max work."""
+
+    task_sha256: str
+    plan_context_sha256: str
+    source_snapshot_hash: str
+    main_fingerprint: str
+    reviewer_route_id: str
+    reviewer_fingerprint: str
+    fingerprint_evidence_source: str
+    reviewer_read_only_enforced: bool
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "task_sha256",
+            "plan_context_sha256",
+            "source_snapshot_hash",
+        ):
+            object.__setattr__(
+                self,
+                field_name,
+                _require_sha256(getattr(self, field_name), field_name),
+            )
+        for field_name in ("main_fingerprint", "reviewer_fingerprint"):
+            value = getattr(self, field_name)
+            if (
+                not isinstance(value, str)
+                or value != value.lower()
+                or len(value.split(":")) != 3
+                or any(not part for part in value.split(":"))
+            ):
+                raise ValueError(f"{field_name} must be a canonical fingerprint")
+        for field_name in ("reviewer_route_id", "fingerprint_evidence_source"):
+            value = getattr(self, field_name)
+            if not isinstance(value, str) or not value.strip() or "\0" in value:
+                raise ValueError(f"{field_name} must be non-empty safe text")
+        if self.reviewer_fingerprint == self.main_fingerprint:
+            raise ValueError("Max reviewer fingerprint must differ from the main loop")
+        if self.reviewer_read_only_enforced is not True:
+            raise ValueError("Max plan approval requires enforced read-only review")
+
+    @property
+    def canonical_value(self) -> dict[str, object]:
+        return {
+            "domain": "model-boss-plan-approval-v1",
+            "fingerprint_evidence_source": self.fingerprint_evidence_source,
+            "main_fingerprint": self.main_fingerprint,
+            "plan_context_sha256": self.plan_context_sha256,
+            "reviewer_fingerprint": self.reviewer_fingerprint,
+            "reviewer_read_only_enforced": self.reviewer_read_only_enforced,
+            "reviewer_route_id": self.reviewer_route_id,
+            "source_snapshot_hash": self.source_snapshot_hash,
+            "task_sha256": self.task_sha256,
+        }
+
+    @property
+    def canonical_hash(self) -> str:
+        raw = json.dumps(
+            self.canonical_value,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("ascii")
+        return hashlib.sha256(raw).hexdigest()
+
+
 def _header(document_tag: _DocumentTag) -> bytes:
     return MAGIC + _u64(FORMAT_VERSION, "format version") + _u64(
         int(document_tag), "document tag"
@@ -744,6 +812,7 @@ __all__ = (
     "PrivateDigestKind",
     "PrivateRecord",
     "PrivateSummary",
+    "PlanApprovalBinding",
     "RecordStatus",
     "RecordTag",
     "SourceSnapshot",
