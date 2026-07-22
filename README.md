@@ -262,7 +262,9 @@ Resolve the directory containing the installed `SKILL.md` and call it
 `<model-boss-skill-root>`. The target repository does not need to contain Model Boss.
 
 The sealed Max workflow has one exact order. Plan and final review must use the same
-reviewer route, resolved fingerprint, read-only proof, and main-loop fingerprint:
+effective reviewer identity/configuration: route, resolved fingerprint,
+identity-evidence source, and read-only proof. They must also use the same main-loop
+fingerprint. The profile path itself may differ when it resolves to those same facts:
 
 ```bash
 mkdir -p "$PWD/../model-boss-runs"
@@ -283,7 +285,7 @@ python3 <model-boss-skill-root>/scripts/model-boss.py worker --manifest <manifes
   --mode max
 
 python3 <model-boss-skill-root>/scripts/model-boss.py review \
-  --profile /absolute/path/to/same-profile.json \
+  --profile /absolute/path/to/profile.json \
   --route <same-reviewer-route> \
   --main-fingerprint <same-provider:model:variant> \
   --manifest <manifest> \

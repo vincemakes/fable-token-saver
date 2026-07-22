@@ -146,8 +146,10 @@ Resolve the directory containing `SKILL.md` for the installed skill and call it
 `<model-boss-skill-root>`. Do not assume the target repository contains Model Boss or
 run a source-root-relative script path.
 
-The sealed Max CLI order is exact. The same profile, route, main fingerprint, and
-resolved reviewer identity must be used at plan and final review:
+The sealed Max CLI order is exact. Plan and final review must use the same effective
+reviewer identity/configuration: route, resolved fingerprint, identity-evidence
+source, and read-only enforcement. They must also use the same main fingerprint. The
+profile path itself may differ when it resolves to exactly those same effective facts:
 
 ```bash
 python3 <model-boss-skill-root>/scripts/model-boss.py plan-review \
@@ -167,7 +169,7 @@ python3 <model-boss-skill-root>/scripts/model-boss.py worker --manifest <manifes
   --mode max
 
 python3 <model-boss-skill-root>/scripts/model-boss.py review \
-  --profile <same-profile-or-path> \
+  --profile <profile-or-path> \
   --route <same-reviewer-route> \
   --main-fingerprint <same-provider:model:variant> \
   --manifest <manifest> \

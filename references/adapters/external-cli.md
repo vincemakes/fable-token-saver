@@ -138,12 +138,14 @@ Both review paths require a strict context JSON with this exact schema:
 ```
 
 After the main loop audits the complete sealed evidence, final Max review must use the
-same profile, route, resolved reviewer fingerprint, and main-loop fingerprint as plan
-review:
+same effective reviewer identity/configuration as plan review: route, resolved
+reviewer fingerprint, identity-evidence source, and read-only enforcement. It must
+also use the same main-loop fingerprint. The profile path itself may differ when it
+resolves to those same facts:
 
 ```bash
 python3 <model-boss-skill-root>/scripts/model-boss.py review \
-  --profile /absolute/path/to/same-profile.json \
+  --profile /absolute/path/to/profile.json \
   --route <same-reviewer-route> \
   --main-fingerprint <same-provider:model:variant> \
   --manifest <manifest> \

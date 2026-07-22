@@ -499,7 +499,7 @@ class BundleRoundTripTests(BundleTestCase):
                 message="wrong reviewer",
                 requested_changes=(),
             )
-        seal_final_review_receipt(
+        final_receipt = seal_final_review_receipt(
             self.resources,
             packet=final_packet,
             decision="approve",
@@ -516,6 +516,59 @@ class BundleRoundTripTests(BundleTestCase):
             message="approved exact final evidence",
             requested_changes=(),
         )
+        self.assertEqual(
+            final_receipt.plan_approval_binding_hash,
+            plan_receipt.approval_binding_hash,
+        )
+        self.assertEqual(
+            final_receipt.plan_review_packet_sha256,
+            plan_receipt.plan_packet_sha256,
+        )
+        self.assertEqual(
+            final_receipt.plan_context_sha256,
+            plan_receipt.plan_context_sha256,
+        )
+        self.assertEqual(final_receipt.task_sha256, plan_receipt.task_sha256)
+
+        substitute_task = b'{"allowed_paths":["task.txt"],"gates":[{"argv":["true"],"cwd":".","timeout_seconds":10}],"prompt":"substituted task","version":1}'
+        substitute_packet = build_plan_review_packet(
+            substitute_task,
+            self.snapshot,
+            {
+                "version": 1,
+                "goal": "substituted goal",
+                "proposed_plan": "substituted plan",
+                "acceptance_criteria": ["substituted criterion"],
+                "risks": ["substituted risk"],
+            },
+            invocation_id=self.resources.invocation_id,
+            main_fingerprint=plan_receipt.main_fingerprint,
+            reviewer_route_id=plan_receipt.reviewer_route_id,
+            reviewer_fingerprint=plan_receipt.reviewer_fingerprint,
+            fingerprint_evidence_source=plan_receipt.fingerprint_evidence_source,
+            reviewer_read_only_enforced=True,
+        )
+        substitute_value = json.loads(substitute_packet)
+        substitute_receipt = replace(
+            plan_receipt,
+            task_sha256=substitute_value["task_sha256"],
+            plan_context_sha256=substitute_value["plan_context_sha256"],
+            plan_packet_sha256=_digest(substitute_packet),
+            approval_binding_hash=substitute_value["approval_binding_hash"],
+            goal="substituted goal",
+            proposed_plan="substituted plan",
+            acceptance_criteria=("substituted criterion",),
+            risks=("substituted risk",),
+        )
+        self.resources.plan_evidence_path.chmod(0o600)
+        self.resources.plan_evidence_path.write_bytes(
+            bundle_module._canonical_json(
+                bundle_module._plan_receipt_payload(substitute_receipt)
+            )
+        )
+        self.resources.plan_evidence_path.chmod(0o400)
+        with self.assertRaisesRegex(BundleError, "plan approval binding"):
+            read_final_review_receipt(self.resources)
         self.resources.plan_evidence_path.unlink()
         with self.assertRaisesRegex(BundleError, "plan"):
             read_final_review_receipt(self.resources)

@@ -64,8 +64,10 @@ Lite executes those same two checkpoints inline.
 
 For the sealed external CLI, the executable Max order is `plan-review`, `worker
 --manifest`, final `review`, then `integrate`. Plan and final review must resolve the
-same reviewer route, canonical fingerprint, identity-evidence source, effective
-read-only enforcement, and main-loop fingerprint. Reviewer verdicts are only
+same effective reviewer identity/configuration: reviewer route, canonical fingerprint,
+identity-evidence source, and effective read-only enforcement. They must also resolve
+the same main-loop fingerprint. The profile path itself need not be identical.
+Reviewer verdicts are only
 `approve` or `revise`; missing inputs produce a `needs_context` status outside the
 verdict, while requested work uses `revise` with a non-empty change list.
 

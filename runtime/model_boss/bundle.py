@@ -209,6 +209,10 @@ class FinalReviewReceipt:
     worker_delta_hash: str
     projected_task_patch_hash: str
     approval_binding_hash: str
+    plan_approval_binding_hash: str | None
+    plan_review_packet_sha256: str | None
+    plan_context_sha256: str | None
+    task_sha256: str | None
     decision: str
     reviewer_route_id: str
     reviewer_fingerprint: str
@@ -262,11 +266,30 @@ class FinalReviewReceipt:
             ):
                 raise ValueError(f"{field_name} must be a canonical fingerprint")
         if self.authority_mode == "max":
+            for field_name in (
+                "plan_approval_binding_hash",
+                "plan_review_packet_sha256",
+                "plan_context_sha256",
+                "task_sha256",
+            ):
+                value = getattr(self, field_name)
+                if not isinstance(value, str) or _SHA256_RE.fullmatch(value) is None:
+                    raise ValueError(f"Max {field_name} must be a lower-case SHA-256 digest")
             if self.reviewer_fingerprint == self.main_fingerprint:
                 raise ValueError("Max reviewer fingerprint must differ from the main loop")
             if self.reviewer_read_only_enforced is not True:
                 raise ValueError("Max approval requires enforced read-only review")
         else:
+            if any(
+                getattr(self, field_name) is not None
+                for field_name in (
+                    "plan_approval_binding_hash",
+                    "plan_review_packet_sha256",
+                    "plan_context_sha256",
+                    "task_sha256",
+                )
+            ):
+                raise ValueError("Lite final receipt cannot carry Max plan bindings")
             if (
                 self.reviewer_route_id != "inline-main-loop"
                 or self.reviewer_fingerprint != self.main_fingerprint
@@ -454,6 +477,12 @@ def _expect_sha256(value: object, label: str) -> str:
     if _SHA256_RE.fullmatch(digest) is None:
         raise BundleError(f"{label} must be a lower-case SHA-256 digest")
     return digest
+
+
+def _expect_optional_sha256(value: object, label: str) -> str | None:
+    if value is None:
+        return None
+    return _expect_sha256(value, label)
 
 
 def _encode_bytes(value: bytes) -> str:
@@ -1842,6 +1871,9 @@ _FINAL_RECEIPT_KEYS = frozenset(
         "invocation_id",
         "main_fingerprint",
         "message",
+        "plan_approval_binding_hash",
+        "plan_context_sha256",
+        "plan_review_packet_sha256",
         "projected_task_patch_hash",
         "requested_changes",
         "review_packet_sha256",
@@ -1850,6 +1882,7 @@ _FINAL_RECEIPT_KEYS = frozenset(
         "reviewer_route_id",
         "schema_version",
         "source_snapshot_hash",
+        "task_sha256",
         "worker_delta_hash",
     }
 )
@@ -2307,6 +2340,20 @@ def _receipt_from_value(value: object) -> FinalReviewReceipt:
             approval_binding_hash=_expect_sha256(
                 receipt["approval_binding_hash"], "approval_binding_hash"
             ),
+            plan_approval_binding_hash=_expect_optional_sha256(
+                receipt["plan_approval_binding_hash"],
+                "plan_approval_binding_hash",
+            ),
+            plan_review_packet_sha256=_expect_optional_sha256(
+                receipt["plan_review_packet_sha256"],
+                "plan_review_packet_sha256",
+            ),
+            plan_context_sha256=_expect_optional_sha256(
+                receipt["plan_context_sha256"], "plan_context_sha256"
+            ),
+            task_sha256=_expect_optional_sha256(
+                receipt["task_sha256"], "task_sha256"
+            ),
             decision=_expect_string(receipt["decision"], "decision"),
             reviewer_route_id=_expect_string(
                 receipt["reviewer_route_id"], "reviewer_route_id"
@@ -2339,6 +2386,9 @@ def _review_receipt_payload(receipt: FinalReviewReceipt) -> dict[str, object]:
         "invocation_id": receipt.invocation_id,
         "main_fingerprint": receipt.main_fingerprint,
         "message": receipt.message,
+        "plan_approval_binding_hash": receipt.plan_approval_binding_hash,
+        "plan_context_sha256": receipt.plan_context_sha256,
+        "plan_review_packet_sha256": receipt.plan_review_packet_sha256,
         "projected_task_patch_hash": receipt.projected_task_patch_hash,
         "requested_changes": list(receipt.requested_changes),
         "review_packet_sha256": receipt.review_packet_sha256,
@@ -2347,6 +2397,7 @@ def _review_receipt_payload(receipt: FinalReviewReceipt) -> dict[str, object]:
         "reviewer_route_id": receipt.reviewer_route_id,
         "schema_version": receipt.schema_version,
         "source_snapshot_hash": receipt.source_snapshot_hash,
+        "task_sha256": receipt.task_sha256,
         "worker_delta_hash": receipt.worker_delta_hash,
     }
 
@@ -2395,6 +2446,24 @@ def seal_final_review_receipt(
             worker_delta_hash=bundle.metadata.worker_delta_hash,
             projected_task_patch_hash=bundle.metadata.projected_task_patch_hash,
             approval_binding_hash=approval_binding_hash,
+            plan_approval_binding_hash=(
+                plan_receipt.approval_binding_hash
+                if plan_receipt is not None
+                else None
+            ),
+            plan_review_packet_sha256=(
+                plan_receipt.plan_packet_sha256
+                if plan_receipt is not None
+                else None
+            ),
+            plan_context_sha256=(
+                plan_receipt.plan_context_sha256
+                if plan_receipt is not None
+                else None
+            ),
+            task_sha256=(
+                plan_receipt.task_sha256 if plan_receipt is not None else None
+            ),
             decision=decision,
             reviewer_route_id=reviewer_route_id,
             reviewer_fingerprint=reviewer_fingerprint,
@@ -2487,6 +2556,13 @@ def read_final_review_receipt(resources: InvocationResources) -> FinalReviewRece
                     or receipt.reviewer_read_only_enforced
                     != plan_receipt.reviewer_read_only_enforced
                     or receipt.main_fingerprint != plan_receipt.main_fingerprint
+                    or receipt.plan_approval_binding_hash
+                    != plan_receipt.approval_binding_hash
+                    or receipt.plan_review_packet_sha256
+                    != plan_receipt.plan_packet_sha256
+                    or receipt.plan_context_sha256
+                    != plan_receipt.plan_context_sha256
+                    or receipt.task_sha256 != plan_receipt.task_sha256
                     or plan_receipt.source_snapshot_hash
                     != bundle.metadata.source_snapshot_hash
                 ):

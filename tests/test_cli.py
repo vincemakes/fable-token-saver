@@ -1137,6 +1137,19 @@ class CliTests(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
+            missing_profile = root / "missing-reviewer-credential-profile.json"
+            missing_value = json.loads(profile.read_text(encoding="utf-8"))
+            missing_value["routes"]["reviewer"]["credential_env"] = [
+                {
+                    "child_name": "REVIEWER_API_KEY",
+                    "source_name": "MODEL_BOSS_TEST_MISSING_REVIEWER_KEY",
+                }
+            ]
+            missing_profile.write_text(
+                json.dumps(missing_value, sort_keys=True, separators=(",", ":")),
+                encoding="utf-8",
+            )
+            environment.pop("MODEL_BOSS_TEST_MISSING_REVIEWER_KEY", None)
             plan_context = root / "plan-context.json"
             plan_context.write_text(
                 json.dumps(
@@ -1151,6 +1164,29 @@ class CliTests(unittest.TestCase):
                     separators=(",", ":"),
                 ),
                 encoding="utf-8",
+            )
+            missing_plan = self._run(
+                "plan-review",
+                "--repo",
+                os.fspath(repository),
+                "--temp-parent",
+                os.fspath(temp_parent),
+                "--task",
+                os.fspath(task_path),
+                "--context",
+                os.fspath(plan_context),
+                "--profile",
+                os.fspath(missing_profile),
+                "--route",
+                "reviewer",
+                "--main-fingerprint",
+                "example:balanced-v1:default",
+                env=environment,
+            )
+            self.assertEqual(missing_plan.returncode, 3)
+            self.assertEqual(
+                json.loads(missing_plan.stdout)["status"],
+                "reviewer_unavailable",
             )
             planned = self._run(
                 "plan-review",
@@ -1216,6 +1252,25 @@ class CliTests(unittest.TestCase):
                     separators=(",", ":"),
                 ),
                 encoding="utf-8",
+            )
+            missing_final = self._run(
+                "review",
+                "--profile",
+                os.fspath(missing_profile),
+                "--route",
+                "reviewer",
+                "--main-fingerprint",
+                "example:balanced-v1:default",
+                "--manifest",
+                os.fspath(manifest_path),
+                "--context",
+                os.fspath(context),
+                env=environment,
+            )
+            self.assertEqual(missing_final.returncode, 3)
+            self.assertEqual(
+                json.loads(missing_final.stdout)["status"],
+                "reviewer_unavailable",
             )
 
             mismatched_profile = root / "mismatched-review-profile.json"

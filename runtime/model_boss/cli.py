@@ -1022,7 +1022,7 @@ def _run_plan_review_command(arguments: argparse.Namespace) -> int:
         if missing:
             print(
                 _json_output(
-                    Status.PROVIDER_UNAVAILABLE,
+                    Status.REVIEWER_UNAVAILABLE,
                     configured_credentials=sorted(credentials),
                     missing_credentials=list(missing),
                     message="reviewer credentials are unavailable",
@@ -1277,7 +1277,7 @@ def _run_review_command(arguments: argparse.Namespace) -> int:
         if missing:
             print(
                 _json_output(
-                    Status.PROVIDER_UNAVAILABLE,
+                    Status.REVIEWER_UNAVAILABLE,
                     configured_credentials=sorted(credentials),
                     missing_credentials=list(missing),
                     message="reviewer credentials are unavailable",

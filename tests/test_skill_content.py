@@ -209,6 +209,23 @@ class SkillContentTests(unittest.TestCase):
             r"`approve`\s*,?\s*`revise`\s*,?\s*(?:or|and)\s*`needs_context`",
         )
 
+    def test_reviewer_continuity_is_effective_identity_not_profile_path(self) -> None:
+        documents = (
+            self.body,
+            (ROOT / "README.md").read_text(encoding="utf-8"),
+            (ROOT / "README.zh-CN.md").read_text(encoding="utf-8"),
+            (ROOT / "references" / "protocol.md").read_text(encoding="utf-8"),
+            (ROOT / "references" / "adapters" / "external-cli.md").read_text(
+                encoding="utf-8"
+            ),
+        )
+        combined = " ".join(" ".join(document.lower().split()) for document in documents)
+        self.assertNotRegex(combined, r"same[- ]profile|同一(?:个)?\s*profile|相同\s*profile")
+        self.assertRegex(
+            combined,
+            r"same effective reviewer (?:identity|configuration)|相同的?有效评审(?:身份|配置)",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

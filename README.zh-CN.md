@@ -264,8 +264,9 @@ PowerShell 中，绝对的 `$env:XDG_CONFIG_HOME` 优先；否则运行时先读
 先找到已安装的 `SKILL.md` 所在目录，并把它记为
 `<model-boss-skill-root>`。目标仓库本身不需要包含 Model Boss。
 
-密封 Max 工作流的顺序固定如下。计划与最终评审必须使用同一个 Reviewer route、实际
-fingerprint、只读证明和主循环 fingerprint：
+密封 Max 工作流的顺序固定如下。计划与最终评审必须使用相同的有效评审身份/配置：
+Reviewer route、实际 fingerprint、身份依据来源与只读证明；同时还必须使用相同的主循环
+fingerprint。Profile 文件路径可以不同，但必须解析为这些完全相同的有效事实：
 
 ```bash
 mkdir -p "$PWD/../model-boss-runs"
@@ -286,7 +287,7 @@ python3 <model-boss-skill-root>/scripts/model-boss.py worker --manifest <manifes
   --mode max
 
 python3 <model-boss-skill-root>/scripts/model-boss.py review \
-  --profile /absolute/path/to/same-profile.json \
+  --profile /absolute/path/to/profile.json \
   --route <same-reviewer-route> \
   --main-fingerprint <same-provider:model:variant> \
   --manifest <manifest> \
