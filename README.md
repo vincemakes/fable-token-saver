@@ -1,119 +1,425 @@
-# fable-token-saver
+# Model Boss
 
-![fable-token-saver — tiered model orchestration for Claude Code](media/og.png)
+![Model Boss — cross-model coding orchestration](media/og.png)
 
 **English** | [简体中文](README.zh-CN.md)
 
-**Tiered model orchestration for Claude Code.** Keep your most expensive model (Fable, Opus — whatever tops the lineup) on judgment work only — decomposing, spec-writing, reviewing — while cheaper models (Sonnet/Haiku tiers) do the implementation. Objective gates (typecheck/tests) filter out everything a machine can catch before an expensive token is spent reviewing.
+Big models think. Small models ship.
 
-## Should you use it? (the whole project in one screen)
+**Cross-model coding orchestration** for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and [Codex](https://github.com/openai/codex). The conversation's host-selected or inherited main loop is immutable input: Model Boss never replaces it. The **Boss** is the workflow authority holder—Lite keeps that authority inline in the inherited main loop, while Max uses a distinct, verified authority reviewer. "Big" and "small" are workflow-relative roles, not a universal ranking of providers or models.
 
-**✅ Worth it: large + constructive + specifiable tasks** (300+ lines / 6+ files — refactors, migrations, greenfield subsystems):
+Canonical repository: [https://github.com/vincemakes/model-boss](https://github.com/vincemakes/model-boss)
 
-- **lite mode** (Fable main loop): quota **−34%**, *also* the lowest total cost, quality even slightly better (+12% tests) — **the everyday default, just leave it on**
-- **max mode** (Opus main loop + Fable consultant): quota **−88%**, capability parity proven by a blind bug-hunt (6/6 vs 6/6) — but total cost **+86%**: you're buying quota with dollars. **Switch when Fable quota is exhausted and the work must continue, or when your work keeps tripping Fable's safeguard flags** (see the modes table below)
+## Should you use it?
 
-**❌ Not worth it (the skill detects both and steps aside — also measured):**
+Use Model Boss when a task is bounded, constructive, and large enough to repay orchestration overhead: a material multi-file implementation, a migration, repeated mechanical changes, or independent packets with testable acceptance criteria.
 
-- **Small tasks** (< ~300 lines): quota goes *up* 34-66%
-- **Debugging / judgment-dense work, at any size**: reasoning can't be delegated — max mode paid 2.2× and took 3.9× longer for byte-identical quality
+Let the main loop work normally for a tiny edit, pure conversation or analysis, unresolved root-cause debugging, or a design/security decision that cannot yet be expressed as acceptance criteria. Rough signals such as 300+ changed lines or 6+ files can help, but task shape matters more than a fixed threshold.
 
-Every number above is from real runs — full tables and methodology in [BENCHMARKS.md](BENCHMARKS.md).
+The published measurements are a historical Claude/Fable/Opus snapshot, not a promise for every model profile. See the [scoped benchmark report](BENCHMARKS.md) before choosing Model Boss for cost or quota reasons.
 
-## How it works
+## Lite and Max at a glance
 
-Every Claude Code session has a **main loop** — the model you pick with `/model`. The main loop pays for everything it touches: every tool result, every file read, every turn of bookkeeping. That "main-loop tax" is most of what a session costs, and a skill cannot change which model runs it — only you can, via `/model`. What a skill *can* do is decide which model runs each **subagent** (the Agent tool takes a per-spawn `model` parameter, using version-agnostic aliases).
+Lite and Max describe where authority lives. They do not name a provider, price tier, or universal model-quality ranking.
 
-This skill exploits both facts:
-
-```
- lite mode  (/model = Fable)              max mode  (/model = Opus 4.8)
- ┌───────────────────────────┐            ┌───────────────────────────┐
- │ FABLE · main loop         │            │ OPUS · main loop          │
- │ classify → spec → review  │            │ classify → spec → review  │
- └─────┬─────────────────────┘            └─────┬───────────────┬─────┘
-       │ task packets                           │ task packets  │ 2 briefs only
-       ▼                                        ▼               ▼
- ┌──────────┐  ┌──────────┐              ┌──────────┐   ┌──────────────┐
- │ SONNET   │  │ HAIKU    │              │ SONNET   │   │ FABLE        │
- │implement │  │ mechanic │              │implement │   │ consultant:  │
- └────┬─────┘  └────┬─────┘              └────┬─────┘   │ plan verdict │
-      │  gate: tsc+tests green ──┐            │  gate   │ final review │
-      ▼                          ▼            ▼         └──────────────┘
-     diff-only review by the main loop       diff review → consultant approves
-```
-
-- **Task packets**, never conversation history: workers get GOAL / CONTEXT (≤5 lines) / ALLOWED FILES / SPEC / GATE / DO-NOT-fence.
-- **Gates before review**: the worker runs `tsc && tests` in *its own* context and self-fixes until green (max 3 attempts). Ungated code is never reviewed.
-- **Diff-only review** for design and intent — the gate owns syntax, types, and test truth.
-- **In max mode**, the strongest model is a stateless consultant: the mid-tier main loop *drafts* the plan (drafting is long-form and belongs on the cheap tier), Fable only *rules* on it, then approves or revises the final diff. Two brief-in/verdict-out calls, zero session context carried (measured: 0 cache-read tokens).
-
-## Two modes — pick by picking your session model
-
-No config file: the skill detects your main-loop model and adapts. Mode names describe **saving intensity** (lite saves less, max saves most) — not model strength.
-
-| | **lite** | **max** |
+| Mode | Authority topology | Worker |
 |---|---|---|
-| Main loop (`/model`) | strongest tier (Fable) | mid tier (**Opus recommended**) |
-| Code written by | Sonnet / Haiku workers | Sonnet / Haiku workers |
-| Strongest tier's job | steers every step | consultant at 2 checkpoints only |
-| Strongest-tier quota | **−34% (measured)** | **−88% (measured, Opus loop)** |
-| Total dollar cost | lowest orchestrated config | **+86% vs baseline** — trades dollars for quota |
-| Use when | top-tier judgment on every turn | strongest-tier quota is your binding constraint |
+| **Lite** | The inherited main loop plans, performs both authority checks, reviews, and integrates. | An optional worker can implement, scout, or perform mechanical work. |
+| **Max** | A distinct, verified authority reviewer checks the plan and final evidence while the inherited main loop coordinates and reviews. | The worker is optional; Max can have two levels or three. |
 
-**Bonus: max mode neutralizes Fable's safeguard downgrades.** Fable 5's safeguards are intentionally broad right now and can flag routine coding or security-hardening work, silently switching your session to Opus mid-task. In max mode there is no Fable session to downgrade — the main loop is already Opus, and Fable is invoked per-checkpoint with a fresh, minimal brief. A flag's blast radius shrinks from your entire session to a single consultant call.
+```text
+Lite
+authority main loop ── plans / reviews / integrates ──> optional worker
 
-## Benchmarks (the elevator version)
-
-Same 1,100-line greenfield task, four configurations, all gates green, quality assertions identical:
-
-- **lite**: strongest-tier quota **−34%**, lowest total cost of any orchestrated config, most tests produced
-- **max (Opus loop)**: strongest-tier quota **−88%**, fastest (116s vs 335s baseline), but total cost +86%
-- **Capability parity verified by a blind bug-hunt**: 6 planted production-grade bugs, symptom-only reports, hidden test suite — baseline Fable **6/6**, max mode **6/6**. Root-cause reasoning survives the consultant architecture intact.
-- **Small tasks (< ~300 lines) and debugging: negative returns** (+34~66% strongest-tier on small tasks; on the bug hunt max mode cost 2.2× for identical quality) — the skill detects both and steps aside
-
-Full four-way tables, the itemized quota bill, per-model pricing, methodology, and honest findings (including why a Sonnet main loop loses on both metrics): **[BENCHMARKS.md](BENCHMARKS.md)**.
-
-## Install
-
-```bash
-git clone https://github.com/vincemakes/fable-token-saver ~/.claude/skills/fable-token-saver
+Max
+authority reviewer <── plan and final evidence ── inherited main loop
+                                                   └── optional worker
 ```
 
-That's it for harnesses whose Agent tool supports per-subagent model override (current Claude Code does). Optionally, install the pinned worker agents for automatic routing:
+Examples are capability mappings, not hard-coded provider rules:
+
+- Fable or Opus as the main loop with a lower Claude worker is Lite.
+- Sol as the main loop with Terra or Luna workers is Lite.
+- Terra as the main loop with a Sol reviewer and an optional Luna worker is Max.
+- Kimi K3 can be an authority-capable external route only when its exact model identity is pinned, verified live, read-only, and distinct from the main loop.
+
+A separate worker is never required. Lite may run entirely in the main loop; Max always requires its separate reviewer but may let the main loop implement.
+
+## The main loop is already selected
+
+The host-selected conversation model is immutable input. Model Boss never replaces it, and profile, user, project, or per-run configuration must not contain a substitute main loop. If the host cannot establish the main loop's canonical `provider_family:resolved_model_id:variant` fingerprint, resolution stops with `needs_context`.
+
+Route names, wrapper names, endpoints, accounts, and model-family prose are hints, not identity proof. Two different aliases that resolve to the same canonical fingerprint are the same model for authority-separation purposes.
+
+## How the shared state machine works
+
+Lite and Max use the same ordered state machine:
+
+```text
+RESOLVE -> PREFLIGHT -> CLASSIFY -> RECON -> DRAFT_PLAN -> AUTHORITY_PLAN_CHECK -> DISPATCH -> GATE -> PATCH_AUDIT -> MAIN_LOOP_REVIEW -> AUTHORITY_FINAL_CHECK -> INTEGRATE
+```
+
+Lite binds both authority checkpoints to the main loop inline. Max binds both checkpoints to one distinct eligible reviewer. Max cannot dispatch before plan approval, and neither mode can integrate before gates, a complete patch audit, main-loop review, and final approval.
+
+For a sealed external-worker invocation, the chosen topology is also a runtime
+invariant: the required `worker --mode lite|max` value is recorded as
+`authority_mode` in the sealed bundle. That `authority_mode` cannot be switched,
+downgraded, or reinterpreted during review or integration. A Lite bundle accepts only
+inline main-loop authority; a Max bundle accepts only a distinct external reviewer.
+
+Workers receive a bounded task packet instead of conversation history. They work in a disposable worktree, and their claims are checked against independently captured process and Git evidence. Final approval is bound to exactly:
+
+```text
+source_snapshot_hash
+worker_delta_hash
+projected_task_patch_hash
+```
+
+If any evidence or destination state changes, the old approval cannot be reused. The full state, evidence, retry, and integration contract is in the [protocol reference](references/protocol.md).
+
+## Model profiles, not model lock-in
+
+Profiles provide capability-based route defaults:
+
+- **authority** routes may review in Max or keep authority inline in Lite.
+- **balanced** routes may coordinate or implement.
+- **fast** routes may implement, scout, or perform mechanical work.
+
+Those declarations are candidates, not proof. Preflight must verify live reachability, exact effective identity, permissions, credential names, and—when an external command can write—a sandbox bound to that exact invocation.
+
+Built-in profiles cover Claude, OpenAI, and Kimi examples, while project and user configuration can replace route definitions. Resolution follows profile → user → project → per-run precedence and never mutates the inherited main loop. The published examples and schema are [`config/model-boss.example.json`](config/model-boss.example.json) and [`config/model-boss.schema.json`](config/model-boss.schema.json); project discovery uses `.model-boss.json`. On POSIX, user discovery uses `$XDG_CONFIG_HOME/model-boss/config.json` only when `XDG_CONFIG_HOME` is absolute; otherwise it uses `$HOME/.config/model-boss/config.json`. On PowerShell, an absolute `$env:XDG_CONFIG_HOME` wins; otherwise the runtime reads absolute `$env:HOME` and falls back to absolute `$env:USERPROFILE` only when HOME is absent. The displayed fallback `$HOME\.config\model-boss\config.json` uses PowerShell's `$HOME` convenience variable. Missing or relative selected roots fail closed. See [routing and capability resolution](references/routing.md) for the complete rules.
+
+The runtime CLI requires Python 3.11+ and Git. The POSIX setup examples also use `bash` and `install`. A write-capable external worker additionally requires a verified OS backend: `/usr/bin/sandbox-exec` on macOS or Bubblewrap (`bwrap`) on Linux, including WSL. Native Windows has no external-writer backend and uses host-native Claude Code or Codex agents instead.
+
+## Claude Code setup
+
+These are fresh-install commands. Each scope installs the skill plus the four host-specific role declarations.
+
+### POSIX — user scope
 
 ```bash
+mkdir -p "$HOME/.claude/skills"
+git clone https://github.com/vincemakes/model-boss.git "$HOME/.claude/skills/model-boss"
+mkdir -p "$HOME/.claude/agents"
+for role in reviewer implementer mechanic scout; do
+  install -m 0644 "$HOME/.claude/skills/model-boss/assets/agents/claude-code/$role.md" \
+    "$HOME/.claude/agents/model-boss-$role.md"
+done
+```
+
+### POSIX — project scope
+
+```bash
+mkdir -p .claude/skills
+git clone https://github.com/vincemakes/model-boss.git .claude/skills/model-boss
 mkdir -p .claude/agents
-cp ~/.claude/skills/fable-token-saver/assets/agents/*.md .claude/agents/
+for role in reviewer implementer mechanic scout; do
+  install -m 0644 ".claude/skills/model-boss/assets/agents/claude-code/$role.md" \
+    ".claude/agents/model-boss-$role.md"
+done
 ```
 
-### Optional: external model workers (GLM / Kimi)
+### PowerShell — user scope
 
-Workers don't have to come from your Anthropic account. One command installs CLI wrappers that run Claude Code against GLM (Zhipu BigModel) or Kimi Anthropic-compatible endpoints:
+```powershell
+$skill = Join-Path $HOME ".claude\skills\model-boss"
+$agents = Join-Path $HOME ".claude\agents"
+New-Item -ItemType Directory -Force (Split-Path $skill -Parent) | Out-Null
+git clone https://github.com/vincemakes/model-boss.git $skill
+New-Item -ItemType Directory -Force $agents | Out-Null
+foreach ($role in "reviewer", "implementer", "mechanic", "scout") {
+  Copy-Item (Join-Path $skill "assets\agents\claude-code\$role.md") `
+    (Join-Path $agents "model-boss-$role.md")
+}
+```
+
+### PowerShell — project scope
+
+```powershell
+$skill = ".claude\skills\model-boss"
+$agents = ".claude\agents"
+New-Item -ItemType Directory -Force (Split-Path $skill -Parent) | Out-Null
+git clone https://github.com/vincemakes/model-boss.git $skill
+New-Item -ItemType Directory -Force $agents | Out-Null
+foreach ($role in "reviewer", "implementer", "mechanic", "scout") {
+  Copy-Item (Join-Path $skill "assets\agents\claude-code\$role.md") `
+    (Join-Path $agents "model-boss-$role.md")
+}
+```
+
+## Codex setup
+
+Check the installed CLI first:
 
 ```bash
-bash scripts/setup-model-providers.sh                                  # interactive: prompts for keys, or auto-migrates
-KIMI_AUTH_TOKEN=sk-... GLM_AUTH_TOKEN=... bash scripts/setup-model-providers.sh   # non-interactive
+codex --version
 ```
 
-It stores API keys in `~/.claude/fable-token-saver/providers.env` (chmod 600 — never in a repo or shell rc), auto-migrating any old-style `claude-kimi()`/`claude-glm()` functions found in `~/.zshrc`, and installs `claude-kimi`, `claude-glm`, `claude-glm-turbo` plus `-bypass` variants (`--dangerously-skip-permissions`, required for headless dispatch). Idempotent — re-run it anytime to update wrappers or rotate a key (pass the new key via env var); providing only one provider's key installs just that provider. The plain commands are for your own interactive sessions; the orchestrator dispatches task packets headlessly. Works with any main loop — Fable in lite mode, Opus/Sonnet in max mode: "用kimi开发，你审核" and the main-loop model reviews what Kimi wrote:
+`codex --version` is diagnostic, not a capability proof. Before selecting the bundled profile, Model Boss preflight must confirm that the installed Codex supports custom agents, that the exact Sol/Terra/Luna IDs are available in the current account and model catalog, and that the requested sandbox and reasoning settings are accepted. A failed availability check returns `provider_unavailable` or `reviewer_unavailable`. Setup never upgrades the CLI automatically.
+
+The bundled Sol profile treats Sol as an authority route, Terra as a balanced route, and Luna as a fast route. These are fresh-install commands for the skill and four Codex agent declarations.
+
+### POSIX — project scope
 
 ```bash
-claude-kimi-bypass -p "<task packet>"
+mkdir -p .agents/skills
+git clone https://github.com/vincemakes/model-boss.git .agents/skills/model-boss
+mkdir -p .codex/agents
+for role in reviewer implementer mechanic scout; do
+  install -m 0644 ".agents/skills/model-boss/assets/agents/codex/$role.toml" \
+    ".codex/agents/model-boss-$role.toml"
+done
 ```
 
-## Use
+### POSIX — user scope
 
-Three ways to start it, in any mode:
+```bash
+mkdir -p "$HOME/.agents/skills"
+git clone https://github.com/vincemakes/model-boss.git "$HOME/.agents/skills/model-boss"
+mkdir -p "$HOME/.codex/agents"
+for role in reviewer implementer mechanic scout; do
+  install -m 0644 "$HOME/.agents/skills/model-boss/assets/agents/codex/$role.toml" \
+    "$HOME/.codex/agents/model-boss-$role.toml"
+done
+```
 
-1. **Explicit** — `/fable-token-saver refactor the payments module`
-2. **Natural language** — "delegate this to cheaper models and review the result", "token-saver this task", "省token模式做这个", "用 token saver 走一下"
-3. **Proactive** — on sizable well-specified tasks (roughly 300+ lines or 6+ files) the skill triggers itself; below that delegation floor it deliberately stays out of the way.
+### PowerShell — project scope
 
-## When not to use it
+```powershell
+$skill = ".agents\skills\model-boss"
+$agents = ".codex\agents"
+New-Item -ItemType Directory -Force (Split-Path $skill -Parent) | Out-Null
+git clone https://github.com/vincemakes/model-boss.git $skill
+New-Item -ItemType Directory -Force $agents | Out-Null
+foreach ($role in "reviewer", "implementer", "mechanic", "scout") {
+  Copy-Item (Join-Path $skill "assets\agents\codex\$role.toml") `
+    (Join-Path $agents "model-boss-$role.toml")
+}
+```
 
-One-liners, pure analysis, design-heavy cores, and anything under the delegation floor. The benchmarks show why: below ~300 lines, packet-writing plus review costs more than just typing the change. The skill says so itself and steps aside.
+### PowerShell — user scope
+
+```powershell
+$skill = Join-Path $HOME ".agents\skills\model-boss"
+$agents = Join-Path $HOME ".codex\agents"
+New-Item -ItemType Directory -Force (Split-Path $skill -Parent) | Out-Null
+git clone https://github.com/vincemakes/model-boss.git $skill
+New-Item -ItemType Directory -Force $agents | Out-Null
+foreach ($role in "reviewer", "implementer", "mechanic", "scout") {
+  Copy-Item (Join-Path $skill "assets\agents\codex\$role.toml") `
+    (Join-Path $agents "model-boss-$role.toml")
+}
+```
+
+## Kimi and GLM external routes
+
+From the installed checkout, install the compatibility wrappers into an explicit directory:
+
+```bash
+bash scripts/setup-model-providers.sh --install-path "$HOME/.local/bin"
+```
+
+With only `--install-path`, setup installs wrappers only. It does not inspect or import the default legacy credential file, even when that file exists, and it never edits shell startup files. Add the directory to `PATH` yourself if necessary. Wrappers alone do not make Kimi or GLM available: configure a complete direct environment or credentials document and install the trusted provider binary separately.
+
+For direct environment setup, Kimi requires exactly `KIMI_BASE_URL` + `KIMI_AUTH_TOKEN`. GLM requires exactly `GLM_BASE_URL` + `GLM_AUTH_TOKEN` + `GLM_MODEL` + `GLM_SMALL_FAST_MODEL`.
+
+Alternatively, create a strict version 1 JSON document with placeholders replaced locally:
+
+```json
+{
+  "version": 1,
+  "credentials": {
+    "GLM_AUTH_TOKEN": "<glm-auth-token>",
+    "GLM_BASE_URL": "<glm-base-url>",
+    "GLM_MODEL": "<glm-model>",
+    "GLM_SMALL_FAST_MODEL": "<glm-small-fast-model>",
+    "KIMI_AUTH_TOKEN": "<kimi-auth-token>",
+    "KIMI_BASE_URL": "<kimi-base-url>"
+  }
+}
+```
+
+On POSIX, credentials discovery uses `$XDG_CONFIG_HOME/model-boss/credentials.json` only when `XDG_CONFIG_HOME` is absolute, and otherwise `$HOME/.config/model-boss/credentials.json`. Secure the chosen directory as `0700` and the file as `0600`; for the HOME fallback:
+
+```bash
+chmod 0700 "$HOME/.config/model-boss"
+chmod 0600 "$HOME/.config/model-boss/credentials.json"
+```
+
+On PowerShell, an absolute `$env:XDG_CONFIG_HOME` wins; otherwise the runtime reads absolute `$env:HOME` and falls back to absolute `$env:USERPROFILE` only when HOME is absent. The displayed `$HOME\.config\model-boss\credentials.json` is the normal PowerShell spelling. An absolute `MODEL_BOSS_CREDENTIALS` overrides discovery. Never put secrets in the repository, `.model-boss.json`, or `config/model-boss.example.json`.
+
+The exact wrapper role mapping is:
+
+| Route role | Reviewer transport base command | Write command allowed only inside verified OS sandbox |
+|---|---|---|
+| Kimi reviewer candidate | `claude-kimi` | — |
+| Kimi implementer | — | `claude-kimi-bypass -p` |
+| GLM reviewer candidate | `claude-glm` | — |
+| GLM implementer | — | `claude-glm-bypass -p` |
+| GLM fast scout/mechanic | `claude-glm-turbo` | `claude-glm-turbo-bypass -p` |
+
+Resolve the directory containing the installed `SKILL.md` and call it
+`<model-boss-skill-root>`. The target repository does not need to contain Model Boss.
+
+The sealed Max workflow has one exact order. Plan and final review must use the same
+effective reviewer identity/configuration: route, resolved fingerprint,
+identity-evidence source, and read-only proof. They must also use the same main-loop
+fingerprint. The profile path itself may differ when it resolves to those same facts:
+
+```bash
+mkdir -p "$PWD/../model-boss-runs"
+python3 <model-boss-skill-root>/scripts/model-boss.py plan-review \
+  --repo "$PWD" \
+  --temp-parent "$PWD/../model-boss-runs" \
+  --task /absolute/path/to/task.json \
+  --context /absolute/path/to/plan-context.json \
+  --profile /absolute/path/to/profile.json \
+  --route <reviewer-route> \
+  --main-fingerprint <provider:model:variant>
+
+python3 <model-boss-skill-root>/scripts/model-boss.py worker --manifest <manifest> \
+  --repo "$PWD" \
+  --temp-parent "$PWD/../model-boss-runs" \
+  --route claude-kimi-bypass \
+  --task /absolute/path/to/task.json \
+  --mode max
+
+python3 <model-boss-skill-root>/scripts/model-boss.py review \
+  --profile /absolute/path/to/profile.json \
+  --route <same-reviewer-route> \
+  --main-fingerprint <same-provider:model:variant> \
+  --manifest <manifest> \
+  --context /absolute/path/to/review-context.json
+
+python3 <model-boss-skill-root>/scripts/model-boss.py integrate <manifest>
+```
+
+The Max plan context contains exactly `version`, `goal`, `proposed_plan`,
+`acceptance_criteria`, and `risks`. The final context must repeat that approved goal,
+plan, and criteria, plus its final-only `main_loop_verdict`. Any task, source, plan, or
+reviewer change blocks dispatch or approval.
+
+Lite performs plan authority inline. Its external worker creates the invocation and
+therefore rejects `--manifest`:
+
+```bash
+python3 <model-boss-skill-root>/scripts/model-boss.py worker \
+  --repo "$PWD" \
+  --temp-parent "$PWD/../model-boss-runs" \
+  --route claude-kimi-bypass \
+  --task /absolute/path/to/task.json \
+  --mode lite
+
+python3 <model-boss-skill-root>/scripts/model-boss.py review --inline \
+  --main-fingerprint <provider:model:variant> \
+  --manifest <manifest> \
+  --context /absolute/path/to/review-context.json
+
+python3 <model-boss-skill-root>/scripts/model-boss.py integrate <manifest>
+```
+
+The worker creates a disposable worktree, reruns the sandbox probe, executes the
+declared gates, and seals the delta without changing the source repository. An
+approving final review writes an invocation-bound receipt; integration accepts only
+the manifest and never a caller-supplied approval file.
+
+See the [external CLI contract](references/adapters/external-cli.md) for the exact task
+and review-context schemas. Do not run a bypass alias directly from an ordinary
+repository; without the one-shot invocation manifest it fails closed. These same
+manifest and command contracts can be driven by either a Claude Code or Codex main
+loop; model/provider names are route data, not branches in the workflow.
+
+Plain wrappers are not inherently read-only. Reviewer transport appends `--safe-mode --no-session-persistence --permission-mode plan --tools "" -p`, runs from an isolated evidence directory, disables repository and tool access, and verifies that directory did not mutate. Even then, a candidate is ineligible for Max until preflight proves its exact model fingerprint and separation from the main loop.
+
+A command name is not proof of model identity and never establishes independence. Codex can invoke an existing `claude-kimi*` command as an external route; this does not make Kimi appear natively in the Codex model picker. Wrapper installation never makes Kimi or GLM a native picker entry.
+
+Write-capable bypass routes launch only inside a verified OS sandbox bound to the command, disposable worktree, route state, and sandbox profile. The current verified writer backends are macOS and Linux, including Linux under WSL. Native Windows external writers fail closed with `sandbox_unavailable`; Claude Code and Codex native-agent orchestration remains available there.
+
+The external worker model receives exactly the `Read`, `Glob`, `Grep`, `Edit`, and
+`Write` tools. Bash is disabled; Web and MCP tools are unavailable. Declared gate
+commands are direct argument arrays executed by the Model Boss host after the model
+call, not shell access granted to the model.
+
+## Safety and failure behavior
+
+Model Boss fails closed:
+
+- An explicit Max request never silently degrades to Lite. An unavailable, colliding, unverified, or effectively write-capable reviewer blocks dispatch.
+- External writers never run in the user's repository. They receive only named credentials in a minimal child environment and can write only inside an invocation-owned disposable worktree.
+- Prompts, logs, manifests, and review packets omit credential values, but the provider
+  client process still receives the credentials needed to call its endpoint. Prefer a
+  short-lived, narrowly scoped token with the least permissions the route supports.
+  The tool allowlist and filesystem sandbox are not a network security boundary: a
+  malicious or compromised provider binary can misuse credentials or readable data,
+  and Model Boss cannot prevent that binary from sending them over its permitted
+  provider connection. Install and run only provider binaries you trust.
+- A worker may self-fix failed gates at most three times. Final authority review allows two revision rounds; a third `revise` returns `review_revise` without integration.
+- Out-of-scope writes return `scope_violation`. Changed evidence returns `approval_stale`. Destination drift returns `destination_changed` and requires a fresh snapshot, audit, main-loop review, and authority approval.
+- Failures report concise non-secret evidence and preserve user changes. Cleanup removes only invocation-owned resources.
+
+The complete public status set is:
+
+```text
+ok
+needs_context
+gate_failed
+provider_unavailable
+reviewer_unavailable
+timeout
+scope_violation
+transport_error
+review_revise
+approval_stale
+destination_changed
+sandbox_unavailable
+```
+
+## Reference benchmark snapshot
+
+The [full benchmark report](BENCHMARKS.md) is a historical reference for the 2026 Claude/Fable/Opus stack. It does not predict savings for Sol, Kimi, or future profiles.
+
+In that recorded large constructive run, Lite changed strongest-model output tokens by `-42%` and used a `-34%` price-weighted quota proxy; Max changed strongest-model output tokens by `-89%` and used a `-88%` quota proxy. Those are different measurements and should not be interchanged. The blind bug-hunt is one observed probe, not general proof, and the report preserves its single-run caveat, raw figures, methodology, and negative results.
+
+## When Model Boss steps aside
+
+Model Boss steps aside before dispatch for tiny edits, pure conversation, unresolved debugging, judgment-dense work without testable acceptance criteria, or tasks below the delegation floor. It also stops rather than improvising when identity, reviewer, provider, sandbox, gate, scope, approval, or destination invariants fail.
+
+Stepping aside leaves the inherited main loop in charge. It does not switch models, invent a route, weaken Max, or treat orchestration already spent as a reason to continue unsafely.
+
+## Migrating from Token Saver
+
+Migration is explicit and no-overwrite. Normal discovery ignores all former paths and old variables. An explicit --legacy-source is required for any legacy import; the default legacy file is not imported by wrapper-only setup. The only canonical legacy-provider import is:
+
+```bash
+python3 <model-boss-skill-root>/scripts/model-boss.py setup-providers --legacy-source <absolute-old-providers.env>
+```
+
+That command parses the named legacy `$HOME/.claude/fable-token-saver/providers.env`-format file as data—never as shell code. `scripts/setup-model-providers.sh` is only a wrapper around the canonical command. Migration never deletes or edits legacy data.
+
+Old JSON credentials are never auto-copied. Manually copy an old JSON credentials file only after checking its file and directory permissions, or point an absolute MODEL_BOSS_CREDENTIALS override at the existing JSON. Old variables are ignored; the exact rows below are manual migration mappings, not compatibility aliases.
+
+| Former surface | Model Boss surface |
+|---|---|
+| `https://github.com/vincemakes/token-saver` | `https://github.com/vincemakes/model-boss` |
+| `.claude/skills/token-saver`, `.agents/skills/token-saver` | `.claude/skills/model-boss`, `.agents/skills/model-boss` |
+| `scripts/token-saver-route.py` | `scripts/model-boss.py` |
+| `runtime.token_saver` | `runtime.model_boss` |
+| `.token-saver.json` | `.model-boss.json` |
+| `$XDG_CONFIG_HOME/token-saver/config.json` when `XDG_CONFIG_HOME` is absolute | `$XDG_CONFIG_HOME/model-boss/config.json` |
+| `$HOME/.config/token-saver/config.json` otherwise | `$HOME/.config/model-boss/config.json` |
+| `$HOME\.config\token-saver\config.json` on PowerShell unless `XDG_CONFIG_HOME` is absolute | `$HOME\.config\model-boss\config.json` |
+| `$XDG_CONFIG_HOME/token-saver/credentials.json` when `XDG_CONFIG_HOME` is absolute | `$XDG_CONFIG_HOME/model-boss/credentials.json` |
+| `$HOME/.config/token-saver/credentials.json` otherwise | `$HOME/.config/model-boss/credentials.json` |
+| `$HOME\.config\token-saver\credentials.json` on PowerShell unless `XDG_CONFIG_HOME` is absolute | `$HOME\.config\model-boss\credentials.json` |
+| `TOKEN_SAVER_CREDENTIALS` | `MODEL_BOSS_CREDENTIALS` |
+| `TOKEN_SAVER_INVOCATION_MANIFEST` | `MODEL_BOSS_INVOCATION_MANIFEST` |
+| `TOKEN_SAVER_TRUSTED_GATE_FAILURES` | `MODEL_BOSS_TRUSTED_GATE_FAILURES` |
+| `TOKEN_SAVER_PROVIDER_API_KEY` | `MODEL_BOSS_PROVIDER_API_KEY` |
+| `token-saver-<role>.md`, `token-saver-<role>.toml` | `model-boss-<role>.md`, `model-boss-<role>.toml` |
+| `token-saver-runs` | `model-boss-runs` |
+| `config/token-saver.example.json`, `config/token-saver.schema.json` | `config/model-boss.example.json`, `config/model-boss.schema.json` |
+| `dist/token-saver.skill` | `dist/model-boss.skill` |
 
 ## License
 
-MIT
+[MIT](LICENSE)

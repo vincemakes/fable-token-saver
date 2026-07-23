@@ -1,0 +1,375 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "authority-main-lite",
+      "input": {
+        "host": "codex",
+        "main_loop": "openai:gpt-5.6-sol:high",
+        "explicit_mode": null,
+        "routes": [
+          {
+            "id": "kimi-worker",
+            "fingerprint": "kimi:kimi-k3:default",
+            "band": "fast",
+            "roles": ["worker"],
+            "reachable": true,
+            "sandbox": "verified"
+          }
+        ],
+        "events": ["plan_approve", "gate_pass", "final_approve"]
+      },
+      "expected": {
+        "mode": "lite",
+        "status": "ok",
+        "authority": "inline",
+        "worker": "kimi-worker",
+        "states": [
+          "RESOLVE",
+          "PREFLIGHT",
+          "CLASSIFY",
+          "RECON",
+          "DRAFT_PLAN",
+          "AUTHORITY_PLAN_CHECK",
+          "DISPATCH",
+          "GATE",
+          "PATCH_AUDIT",
+          "MAIN_LOOP_REVIEW",
+          "AUTHORITY_FINAL_CHECK",
+          "INTEGRATE"
+        ],
+        "evidence": {
+          "authority_binding": "main_loop",
+          "gate_result": "passed",
+          "approval_binding": "current"
+        }
+      }
+    },
+    {
+      "id": "balanced-main-distinct-reviewer-max",
+      "input": {
+        "host": "codex",
+        "main_loop": "openai:gpt-5.6-terra:medium",
+        "explicit_mode": null,
+        "routes": [
+          {
+            "id": "sol-reviewer",
+            "fingerprint": "openai:gpt-5.6-sol:high",
+            "band": "authority",
+            "roles": ["reviewer"],
+            "reachable": true,
+            "read_only": true
+          }
+        ],
+        "events": ["plan_approve", "final_approve"]
+      },
+      "expected": {
+        "mode": "max",
+        "status": "ok",
+        "authority": "sol-reviewer",
+        "worker": "main_loop",
+        "states": [
+          "RESOLVE",
+          "PREFLIGHT",
+          "CLASSIFY",
+          "RECON",
+          "DRAFT_PLAN",
+          "AUTHORITY_PLAN_CHECK",
+          "DISPATCH",
+          "GATE",
+          "PATCH_AUDIT",
+          "MAIN_LOOP_REVIEW",
+          "AUTHORITY_FINAL_CHECK",
+          "INTEGRATE"
+        ],
+        "evidence": {
+          "reviewer_fingerprint": "openai:gpt-5.6-sol:high",
+          "reviewer_read_only": true,
+          "approval_binding": "current"
+        }
+      }
+    },
+    {
+      "id": "alias-collision",
+      "input": {
+        "host": "codex",
+        "main_loop": "openai:gpt-5.6-sol:high",
+        "explicit_mode": "max",
+        "routes": [
+          {
+            "id": "sol-direct",
+            "fingerprint": "openai:gpt-5.6-sol:high",
+            "band": "authority",
+            "roles": ["reviewer"],
+            "reachable": true,
+            "read_only": true
+          },
+          {
+            "id": "sol-proxy-alias",
+            "fingerprint": "openai:gpt-5.6-sol:high",
+            "band": "authority",
+            "roles": ["reviewer"],
+            "reachable": true,
+            "read_only": true
+          }
+        ],
+        "events": []
+      },
+      "expected": {
+        "mode": "max",
+        "status": "reviewer_unavailable",
+        "authority": null,
+        "worker": null,
+        "states": ["RESOLVE", "PREFLIGHT"],
+        "evidence": {
+          "failed_invariant": "reviewer_fingerprint_must_differ_from_main_loop",
+          "main_loop_fingerprint": "openai:gpt-5.6-sol:high",
+          "reviewer_fingerprint": "openai:gpt-5.6-sol:high"
+        }
+      }
+    },
+    {
+      "id": "reviewer-unavailable",
+      "input": {
+        "host": "claude-code",
+        "main_loop": "anthropic:sonnet:default",
+        "explicit_mode": "max",
+        "routes": [
+          {
+            "id": "sol-reviewer",
+            "fingerprint": "openai:gpt-5.6-sol:high",
+            "band": "authority",
+            "roles": ["reviewer"],
+            "reachable": false,
+            "read_only": true
+          }
+        ],
+        "events": []
+      },
+      "expected": {
+        "mode": "max",
+        "status": "reviewer_unavailable",
+        "authority": null,
+        "worker": null,
+        "states": ["RESOLVE", "PREFLIGHT"],
+        "evidence": {
+          "failed_invariant": "explicit_max_requires_reachable_distinct_reviewer",
+          "route_id": "sol-reviewer",
+          "reachable": false
+        }
+      }
+    },
+    {
+      "id": "revise-loop",
+      "input": {
+        "host": "codex",
+        "main_loop": "openai:gpt-5.6-terra:medium",
+        "explicit_mode": "max",
+        "routes": [
+          {
+            "id": "sol-reviewer",
+            "fingerprint": "openai:gpt-5.6-sol:high",
+            "band": "authority",
+            "roles": ["reviewer"],
+            "reachable": true,
+            "read_only": true
+          },
+          {
+            "id": "kimi-worker",
+            "fingerprint": "kimi:kimi-k3:default",
+            "band": "fast",
+            "roles": ["worker"],
+            "reachable": true,
+            "sandbox": "verified"
+          }
+        ],
+        "events": ["plan_approve", "revise", "revise", "approve"]
+      },
+      "expected": {
+        "mode": "max",
+        "status": "ok",
+        "authority": "sol-reviewer",
+        "worker": "kimi-worker",
+        "states": [
+          "RESOLVE",
+          "PREFLIGHT",
+          "CLASSIFY",
+          "RECON",
+          "DRAFT_PLAN",
+          "AUTHORITY_PLAN_CHECK",
+          "DISPATCH",
+          "GATE",
+          "PATCH_AUDIT",
+          "MAIN_LOOP_REVIEW",
+          "AUTHORITY_FINAL_CHECK",
+          "DISPATCH",
+          "GATE",
+          "PATCH_AUDIT",
+          "MAIN_LOOP_REVIEW",
+          "AUTHORITY_FINAL_CHECK",
+          "DISPATCH",
+          "GATE",
+          "PATCH_AUDIT",
+          "MAIN_LOOP_REVIEW",
+          "AUTHORITY_FINAL_CHECK",
+          "INTEGRATE"
+        ],
+        "evidence": {
+          "revision_rounds": 2,
+          "final_decision": "approve",
+          "approval_binding": "current"
+        }
+      }
+    },
+    {
+      "id": "revision-limit",
+      "input": {
+        "host": "codex",
+        "main_loop": "openai:gpt-5.6-terra:medium",
+        "explicit_mode": "max",
+        "routes": [
+          {
+            "id": "sol-reviewer",
+            "fingerprint": "openai:gpt-5.6-sol:high",
+            "band": "authority",
+            "roles": ["reviewer"],
+            "reachable": true,
+            "read_only": true
+          },
+          {
+            "id": "kimi-worker",
+            "fingerprint": "kimi:kimi-k3:default",
+            "band": "fast",
+            "roles": ["worker"],
+            "reachable": true,
+            "sandbox": "verified"
+          }
+        ],
+        "events": ["plan_approve", "revise", "revise", "revise"]
+      },
+      "expected": {
+        "mode": "max",
+        "status": "review_revise",
+        "authority": "sol-reviewer",
+        "worker": "kimi-worker",
+        "states": [
+          "RESOLVE",
+          "PREFLIGHT",
+          "CLASSIFY",
+          "RECON",
+          "DRAFT_PLAN",
+          "AUTHORITY_PLAN_CHECK",
+          "DISPATCH",
+          "GATE",
+          "PATCH_AUDIT",
+          "MAIN_LOOP_REVIEW",
+          "AUTHORITY_FINAL_CHECK",
+          "DISPATCH",
+          "GATE",
+          "PATCH_AUDIT",
+          "MAIN_LOOP_REVIEW",
+          "AUTHORITY_FINAL_CHECK",
+          "DISPATCH",
+          "GATE",
+          "PATCH_AUDIT",
+          "MAIN_LOOP_REVIEW",
+          "AUTHORITY_FINAL_CHECK"
+        ],
+        "evidence": {
+          "failed_invariant": "final_review_revision_limit",
+          "revision_rounds": 3,
+          "allowed_revision_rounds": 2
+        }
+      }
+    },
+    {
+      "id": "approval-stale",
+      "input": {
+        "host": "codex",
+        "main_loop": "openai:gpt-5.6-terra:medium",
+        "explicit_mode": "max",
+        "routes": [
+          {
+            "id": "sol-reviewer",
+            "fingerprint": "openai:gpt-5.6-sol:high",
+            "band": "authority",
+            "roles": ["reviewer"],
+            "reachable": true,
+            "read_only": true
+          },
+          {
+            "id": "kimi-worker",
+            "fingerprint": "kimi:kimi-k3:default",
+            "band": "fast",
+            "roles": ["worker"],
+            "reachable": true,
+            "sandbox": "verified"
+          }
+        ],
+        "events": ["plan_approve", "final_approve", "evidence_changed"]
+      },
+      "expected": {
+        "mode": "max",
+        "status": "approval_stale",
+        "authority": "sol-reviewer",
+        "worker": "kimi-worker",
+        "states": [
+          "RESOLVE",
+          "PREFLIGHT",
+          "CLASSIFY",
+          "RECON",
+          "DRAFT_PLAN",
+          "AUTHORITY_PLAN_CHECK",
+          "DISPATCH",
+          "GATE",
+          "PATCH_AUDIT",
+          "MAIN_LOOP_REVIEW",
+          "AUTHORITY_FINAL_CHECK"
+        ],
+        "evidence": {
+          "failed_invariant": "approval_binding_matches_current_three_hash_tuple",
+          "changed_member": "worker_delta_hash"
+        }
+      }
+    },
+    {
+      "id": "sandbox-unavailable",
+      "input": {
+        "host": "claude-code",
+        "main_loop": "anthropic:sonnet:default",
+        "explicit_mode": "max",
+        "routes": [
+          {
+            "id": "sol-reviewer",
+            "fingerprint": "openai:gpt-5.6-sol:high",
+            "band": "authority",
+            "roles": ["reviewer"],
+            "reachable": true,
+            "read_only": true
+          },
+          {
+            "id": "kimi-worker",
+            "fingerprint": "kimi:kimi-k3:default",
+            "band": "fast",
+            "roles": ["worker"],
+            "reachable": true,
+            "sandbox": "unavailable"
+          }
+        ],
+        "events": []
+      },
+      "expected": {
+        "mode": "max",
+        "status": "sandbox_unavailable",
+        "authority": "sol-reviewer",
+        "worker": "kimi-worker",
+        "states": ["RESOLVE", "PREFLIGHT"],
+        "evidence": {
+          "failed_invariant": "external_worker_requires_verified_os_sandbox",
+          "route_id": "kimi-worker",
+          "sandbox": "unavailable"
+        }
+      }
+    }
+  ]
+}

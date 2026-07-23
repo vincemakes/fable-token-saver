@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "mode": "auto",
+  "routes": {
+    "gpt-5.6-sol": {
+      "transport": "host-subagent",
+      "band": "authority",
+      "roles": [
+        "reviewer"
+      ],
+      "read_only": true,
+      "model": "gpt-5.6-sol",
+      "provider_family": "openai",
+      "variant": "high"
+    },
+    "gpt-5.6-terra": {
+      "transport": "host-subagent",
+      "band": "balanced",
+      "roles": [
+        "worker"
+      ],
+      "read_only": false,
+      "model": "gpt-5.6-terra",
+      "provider_family": "openai",
+      "variant": "medium"
+    },
+    "gpt-5.6-luna": {
+      "transport": "host-subagent",
+      "band": "fast",
+      "roles": [
+        "worker",
+        "scout",
+        "mechanic"
+      ],
+      "read_only": false,
+      "model": "gpt-5.6-luna",
+      "provider_family": "openai",
+      "variant": "low"
+    }
+  },
+  "preferences": {
+    "reviewers": [
+      "gpt-5.6-sol"
+    ],
+    "workers": [
+      "gpt-5.6-terra",
+      "gpt-5.6-luna"
+    ],
+    "scouts": [
+      "gpt-5.6-luna"
+    ],
+    "mechanics": [
+      "gpt-5.6-luna"
+    ]
+  }
+}

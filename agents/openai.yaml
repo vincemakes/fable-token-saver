@@ -1,0 +1,4 @@
+interface:
+  display_name: "Model Boss"
+  short_description: "Cross-model Lite/Max orchestration"
+  default_prompt: "Use $model-boss to route this coding task through the safest cost-aware Lite or Max topology."

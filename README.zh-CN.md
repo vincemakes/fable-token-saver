@@ -1,119 +1,416 @@
-# fable-token-saver
+# Model Boss
 
-![fable-token-saver — Claude Code 分层模型编排](media/og.png)
+![Model Boss 的 Lite 与 Max 跨模型编排](media/og.png)
 
 [English](README.md) | **简体中文**
 
-**Claude Code 的分层模型编排。** 让最贵的模型(Fable、Opus——阵容里最强的那个)只干判断力工作——拆解、写规格、审查;实现全部交给便宜档(Sonnet/Haiku)。客观闸门(类型检查/测试)先把机器能抓的错全部过滤掉,贵模型一个 token 都不花在这些上面。
+Big models think. Small models ship.
 
-## 该不该用?(一屏看完整个项目)
+**Cross-model coding orchestration**（跨模型编程编排），适用于 Claude Code 与 Codex。对话的主循环由宿主选定并沿用；Model Boss 永远不会替换它。**Boss** 是工作流的权威持有者：Lite 由继承的主循环 inline 持有权威，Max 由一个独立且已验证的 Reviewer 持有权威。“大/小”是相对于工作流的角色，并非 Provider 或模型的通用排名。
 
-**✅ 有意义:大型 + 构建型 + 可写规格的任务**(300+ 行 / 6+ 文件——重构、迁移、从零建子系统):
+项目地址：<https://github.com/vincemakes/model-boss>
 
-- **lite 档**(Fable 主循环):额度 **−34%**,总费用*还是*最低的,质量甚至略好(测试多 12%)——**日常默认,无脑开**
-- **max 档**(Opus 主循环 + Fable 顾问):额度 **−88%**,能力持平已用盲测调试赛实证(6/6 vs 6/6)——但总费用 **+86%**,是拿美元换额度。**Fable 额度见底又必须继续干活时切,或者你的工作老被 Fable 的 safeguard flag 时切**(见下文两档模式表)
+## 你是否应该使用它？
 
-**❌ 没意义(skill 会自己检测并让位——这也是实测的):**
+适合大型、构建型、能提前写清验收标准的任务，例如多文件迁移、重复性改造和新
+子系统。此时可以把实现交给执行模型 / Worker，同时让高级模型把 token 花在规划
+与评审上。
 
-- **小任务**(< ~300 行):额度反升 34~66%
-- **调试 / 判断密集型任务,不管多大**:推理没法下放——max 档花 2.2 倍钱、慢 3.9 倍,换来完全相同的结果
+小改动、纯讨论、尚未定位根因的调试，以及无法先写成规格的设计或安全决策，不适合
+编排。Model Boss 会让开，由已经选定的主循环直接处理。
 
-以上每个数字都来自真实运行——完整表格和方法论见 [BENCHMARKS.zh-CN.md](BENCHMARKS.zh-CN.md)。
+## Lite 与 Max 一览
 
-## 工作原理
+Lite 和 Max 描述的是权威裁决放在哪里，不是模型品牌或质量排名。
 
-每个 Claude Code 会话都有一个**主循环**——你用 `/model` 选的那个模型。主循环要为它经手的一切付钱:每个工具返回、每次读文件、每轮簿记。这笔"主循环税"占了会话成本的大头,而且 skill 无法更换主循环模型——只有你能,通过 `/model`。skill *能*做的是决定每个**子代理**用什么模型(Agent 工具支持按次指定 `model` 参数,用版本无关的别名)。
+```text
+Lite（主循环内裁决）
+高级模型主循环 ──规划 / AUTHORITY_PLAN_CHECK / AUTHORITY_FINAL_CHECK──> Worker
 
-这个 skill 同时利用这两个事实:
-
-```
- lite 档  (/model = Fable)                max 档  (/model = Opus 4.8)
- ┌───────────────────────────┐            ┌───────────────────────────┐
- │ FABLE · 主循环            │            │ OPUS · 主循环             │
- │ 分类 → 写规格 → 审查      │            │ 分类 → 写规格 → 审查      │
- └─────┬─────────────────────┘            └─────┬───────────────┬─────┘
-       │ 任务包                                 │ 任务包        │ 仅2次简报
-       ▼                                        ▼               ▼
- ┌──────────┐  ┌──────────┐              ┌──────────┐   ┌──────────────┐
- │ SONNET   │  │ HAIKU    │              │ SONNET   │   │ FABLE        │
- │ 写代码   │  │ 机械活   │              │ 写代码   │   │ 顾问:       │
- └────┬─────┘  └────┬─────┘              └────┬─────┘   │ 计划裁决     │
-      │  闸门: tsc+测试 全绿 ──┐              │  闸门   │ 合并前终审   │
-      ▼                        ▼              ▼         └──────────────┘
-     主循环只审 diff                        审 diff → 顾问放行
+Max（外部高级裁决）
+权威评审模型 <──AUTHORITY_PLAN_CHECK / AUTHORITY_FINAL_CHECK──> 主循环
+                                                            └── 可选 Worker
 ```
 
-- **任务包**,绝不转发对话历史:worker 只拿 GOAL / CONTEXT(≤5行)/ ALLOWED FILES / SPEC / GATE / DO-NOT 围栏。
-- **闸门先于审查**:worker 在*自己的*上下文里跑 `tsc && 测试`,自修到绿(最多 3 次)。没过闸的代码永远不会被审。
-- **只审 diff**,审设计和意图——语法、类型、测试真伪归闸门管。
-- **max 档里,最强模型是无状态顾问**:中档主循环*起草*计划(长文归便宜档),Fable 只*裁决*,最后对 diff 放行或打回。两次"简报进、裁决出",零会话上下文(实测:缓存读 0 token)。
+- Lite：主循环负责思考、规划、主循环评审与两次权威裁决；Worker 负责被界定好的
+  实现。没有合适 Worker 时也可以由主循环实现。
+- Max：主循环负责协调、草拟计划和自己的代码评审；一个 canonical fingerprint
+  不同的高级评审模型负责计划与最终裁决。更低成本的 Worker 是可选的，所以 Max
+  可以是两层，也可以是三层。
 
-## 两档模式——选主循环模型就是选档
+## 主循环已经选定
 
-不需要配置文件:skill 探测主循环模型后自动适配。档位名描述的是**省 token 的力度**(lite 省得少、max 省得满)——不是模型强度,类似汽车的 eco 模式。
+主循环（main loop）在 Model Boss 启动前已经由宿主选定，并在整个运行中不可变。Profile、用户
+配置、项目配置和单次参数都不能替换它，只能配置新派生的 Reviewer、Worker、Scout
+或 Mechanic。
 
-| | **lite 档** | **max 档** |
-|---|---|---|
-| 主循环(`/model` 切换) | 最强档(Fable) | 中档(**推荐 Opus**) |
-| 代码谁写 | Sonnet / Haiku worker | Sonnet / Haiku worker |
-| 最强档干什么 | 全程掌舵每一步 | 只在 2 个检查点当顾问 |
-| 最强档额度 | **−34%(实测)** | **−88%(实测,Opus 主循环)** |
-| 总费用(美元) | 编排方案里最低 | **比基线贵 +86%**——拿美元换额度 |
-| 什么时候用 | 想要顶级判断力盯每一步 | 最强档额度就是你的硬约束 |
+模型身份必须来自用户明确说明或宿主的结构化元数据。命令名、wrapper 名、账号名和
+Endpoint 都不是模型身份。身份不清时返回 `needs_context`；显式 Max 没有可验证的
+高级 Reviewer 时返回 `reviewer_unavailable`，绝不偷偷降级成 Lite。
 
-**附带收益:max 档天然免疫 Fable 的 safeguard 降级。** Fable 5 当前的安全护栏刻意放得很宽,常规编码、安全加固类工作也可能被 flag,session 半路被悄悄切到 Opus。max 档下根本不存在可被降级的 Fable session——主循环本来就是 Opus,Fable 每次都以全新的极简 brief 被调用。一次 flag 的爆炸半径从整个 session 缩小到单次顾问调用。
+## 共享状态机如何工作
 
-## Benchmarks(电梯版)
+Claude Code、Codex 与外部 CLI 走完全相同的状态序列：
 
-同一个 1,100 行的从零构建任务,四种配置,闸门全绿、质量断言完全一致:
+```text
+RESOLVE -> PREFLIGHT -> CLASSIFY -> RECON -> DRAFT_PLAN -> AUTHORITY_PLAN_CHECK -> DISPATCH -> GATE -> PATCH_AUDIT -> MAIN_LOOP_REVIEW -> AUTHORITY_FINAL_CHECK -> INTEGRATE
+```
 
-- **lite 档**:最强档额度 **−34%**,编排方案里总费用最低,产出测试最多
-- **max 档(Opus 主循环)**:最强档额度 **−88%**,最快(116s vs 基线 335s),但总费用 +86%
-- **能力持平已用盲测调试赛验证**:6 颗生产级埋雷、只给症状报告、盲测试集判分——基线 Fable **6/6**,max 档 **6/6**,根因推理能力在顾问架构下完整保留
-- **小任务(< ~300 行)和调试任务:负收益**(小任务最强档 +34~66%;调试赛里 max 档花 2.2 倍价钱换来相同质量)——skill 都会自己检测并让位
+对于密封的外部 Worker 调用，所选拓扑也是运行时不变量：必填的
+`worker --mode lite|max` 会作为 `authority_mode` 密封进 bundle。这个
+`authority_mode` 在 review 与 integrate 阶段都不能切换、降级或重新解释。Lite bundle
+只接受主循环 inline 裁决；Max bundle 只接受 fingerprint 不同的外部 Reviewer。
 
-完整的四组对照表、逐项额度账单、各模型价目、测试方法和诚实结论(包括为什么 Sonnet 当主循环两头输):**[BENCHMARKS.zh-CN.md](BENCHMARKS.zh-CN.md)**。
+Worker 最多自修三次。最终 Reviewer 最多提出两轮 `revise`；第三次返回
+`review_revise` 并停止。审批绑定
+`source_snapshot_hash`、`worker_delta_hash` 与
+`projected_task_patch_hash`，集成前任一内容变化都会让旧审批失效。
 
-## 安装
+完整协议见 [SKILL.md](SKILL.md)、[协议参考](references/protocol.md) 与
+[路由规则](references/routing.md)。
+
+## 模型 Profile，而非模型锁定
+
+内置 Profile 只是能力别名与默认偏好，不是状态机分支：
+
+- Fable/Opus 主循环 + 更低成本 Claude Worker：Lite 示例。
+- Sol 主循环 + Terra/Luna Worker：Lite 示例。
+- Terra 主循环 + fingerprint 不同的 Sol Reviewer + 可选 Luna Worker：Max 示例。
+- Kimi K3 只有在精确身份被固定并由 preflight 验证后，才能作为高级外部路由。
+
+你可以增加未来模型或自定义 CLI 路由，只要它们声明能力和角色，并通过相同的身份、
+权限、沙箱与证据检查。发布的示例与 schema 是 [`config/model-boss.example.json`](config/model-boss.example.json) 和 [`config/model-boss.schema.json`](config/model-boss.schema.json)；项目自动发现 `.model-boss.json`。POSIX 只在 `XDG_CONFIG_HOME` 是绝对路径时使用 `$XDG_CONFIG_HOME/model-boss/config.json`，否则使用 `$HOME/.config/model-boss/config.json`。PowerShell 中，绝对的 `$env:XDG_CONFIG_HOME` 优先；否则运行时先读取绝对的 `$env:HOME`，只在 HOME 缺失时回退到绝对的 `$env:USERPROFILE`。文档显示的 `$HOME\.config\model-boss\config.json` 使用 PowerShell 的 `$HOME` 便捷变量。被选中的根路径缺失或为相对路径时会安全失败。Profile 文件位于 [references/profiles](references/profiles)。
+
+运行时 CLI 需要 Python 3.11+ 与 Git；POSIX 安装示例还会使用 `bash` 和 `install`。
+可写的外部 Worker 还必须有验证过的 OS 后端：macOS 使用
+`/usr/bin/sandbox-exec`，Linux（包括 WSL）使用 Bubblewrap（`bwrap`）。Windows
+原生环境没有外部写 Worker 后端，只使用 Claude Code 或 Codex 的宿主原生 Agent。
+
+## Claude Code 安装
+
+以下命令会同时安装 Skill 与默认 Anthropic 角色资产；这些角色不会替换主循环。
+
+**POSIX，用户级：**
 
 ```bash
-git clone https://github.com/vincemakes/fable-token-saver ~/.claude/skills/fable-token-saver
+mkdir -p "$HOME/.claude/skills"
+git clone https://github.com/vincemakes/model-boss.git "$HOME/.claude/skills/model-boss"
+mkdir -p "$HOME/.claude/agents"
+for role in reviewer implementer mechanic scout; do
+  install -m 0644 "$HOME/.claude/skills/model-boss/assets/agents/claude-code/$role.md" \
+    "$HOME/.claude/agents/model-boss-$role.md"
+done
 ```
 
-Agent 工具支持按子代理覆写模型的环境(当前 Claude Code 支持)装完即用。可选:安装固定路由的 worker agent 定义:
+**POSIX，项目级：**
 
 ```bash
+mkdir -p .claude/skills
+git clone https://github.com/vincemakes/model-boss.git .claude/skills/model-boss
 mkdir -p .claude/agents
-cp ~/.claude/skills/fable-token-saver/assets/agents/*.md .claude/agents/
+for role in reviewer implementer mechanic scout; do
+  install -m 0644 ".claude/skills/model-boss/assets/agents/claude-code/$role.md" \
+    ".claude/agents/model-boss-$role.md"
+done
 ```
 
-### 可选:外部模型 worker(GLM / Kimi)
+**PowerShell，用户级：**
 
-干活的模型不一定来自你的 Anthropic 账号。一条命令安装 CLI 包装器,让 Claude Code 跑在 GLM(智谱)或 Kimi 的 Anthropic 兼容端点上:
+```powershell
+$skill = Join-Path $HOME ".claude\skills\model-boss"
+$agents = Join-Path $HOME ".claude\agents"
+New-Item -ItemType Directory -Force (Split-Path $skill -Parent) | Out-Null
+git clone https://github.com/vincemakes/model-boss.git $skill
+New-Item -ItemType Directory -Force $agents | Out-Null
+foreach ($role in "reviewer", "implementer", "mechanic", "scout") {
+  Copy-Item (Join-Path $skill "assets\agents\claude-code\$role.md") `
+    (Join-Path $agents "model-boss-$role.md")
+}
+```
+
+**PowerShell，项目级：**
+
+```powershell
+$skill = ".claude\skills\model-boss"
+$agents = ".claude\agents"
+New-Item -ItemType Directory -Force (Split-Path $skill -Parent) | Out-Null
+git clone https://github.com/vincemakes/model-boss.git $skill
+New-Item -ItemType Directory -Force $agents | Out-Null
+foreach ($role in "reviewer", "implementer", "mechanic", "scout") {
+  Copy-Item (Join-Path $skill "assets\agents\claude-code\$role.md") `
+    (Join-Path $agents "model-boss-$role.md")
+}
+```
+
+## Codex 安装
+
+使用 Sol Profile 前先检查版本：
 
 ```bash
-bash scripts/setup-model-providers.sh                                  # 交互式:提示输入 key,或自动迁移
-KIMI_AUTH_TOKEN=sk-... GLM_AUTH_TOKEN=... bash scripts/setup-model-providers.sh   # 非交互式
+codex --version
 ```
 
-API key 存到 `~/.claude/fable-token-saver/providers.env`(chmod 600,永不进 repo 或 shell rc),`~/.zshrc` 里旧式的 `claude-kimi()`/`claude-glm()` 函数会被自动迁移;安装 `claude-kimi`、`claude-glm`、`claude-glm-turbo` 及各自的 `-bypass` 变体(`--dangerously-skip-permissions`,headless 派发必需)。脚本幂等,随时可重跑——更新包装器或换 key(新 key 用环境变量传入)都直接重跑即可;只给一个 provider 的 key 就只装那一个。不带后缀的命令给你自己交互用;编排者则用 headless 方式派发任务包。任何主循环模型都能派——lite 档的 Fable、max 档的 Opus/Sonnet 同理:"用kimi开发,你审核",Kimi 写代码,主循环模型审 diff:
+`codex --version` 只用于诊断，不是能力证明。选择内置 Profile 前，Model Boss 的
+preflight / 预检必须确认当前 Codex 支持自定义 Agent、当前账号与模型目录确实提供
+所需的 Sol/Terra/Luna ID，并且目标沙箱与 reasoning 参数可用。可用性检查失败时返回
+`provider_unavailable` 或 `reviewer_unavailable`；安装流程不会自动升级 Codex。
+
+**POSIX，项目级：**
 
 ```bash
-claude-kimi-bypass -p "<任务包>"
+mkdir -p .agents/skills
+git clone https://github.com/vincemakes/model-boss.git .agents/skills/model-boss
+mkdir -p .codex/agents
+for role in reviewer implementer mechanic scout; do
+  install -m 0644 ".agents/skills/model-boss/assets/agents/codex/$role.toml" \
+    ".codex/agents/model-boss-$role.toml"
+done
 ```
 
-## 使用
+**POSIX，用户级：**
 
-三种启动方式,任何档位通用:
+```bash
+mkdir -p "$HOME/.agents/skills"
+git clone https://github.com/vincemakes/model-boss.git "$HOME/.agents/skills/model-boss"
+mkdir -p "$HOME/.codex/agents"
+for role in reviewer implementer mechanic scout; do
+  install -m 0644 "$HOME/.agents/skills/model-boss/assets/agents/codex/$role.toml" \
+    "$HOME/.codex/agents/model-boss-$role.toml"
+done
+```
 
-1. **显式调用** —— `/fable-token-saver 把这个模块重构了`
-2. **自然语言** —— "用 token saver 走一下"、"省token模式做这个"、"把这个委托给便宜模型做,你负责审查"
-3. **主动触发** —— 大任务(约 300+ 行或 6+ 文件)时 skill 自己触发;低于委托门槛时它会刻意不掺和。
+**PowerShell，项目级：**
 
-## 什么时候别用它
+```powershell
+$skill = ".agents\skills\model-boss"
+$agents = ".codex\agents"
+New-Item -ItemType Directory -Force (Split-Path $skill -Parent) | Out-Null
+git clone https://github.com/vincemakes/model-boss.git $skill
+New-Item -ItemType Directory -Force $agents | Out-Null
+foreach ($role in "reviewer", "implementer", "mechanic", "scout") {
+  Copy-Item (Join-Path $skill "assets\agents\codex\$role.toml") `
+    (Join-Path $agents "model-boss-$role.toml")
+}
+```
 
-一行改动、纯分析讨论、设计密集型核心、以及低于委托门槛的一切任务。benchmark 说明了原因:~300 行以下,"写任务包 + 审查"比直接把改动敲出来还贵。skill 自己会说"这个我不该接"然后让位。
+**PowerShell，用户级：**
 
-## License
+```powershell
+$skill = Join-Path $HOME ".agents\skills\model-boss"
+$agents = Join-Path $HOME ".codex\agents"
+New-Item -ItemType Directory -Force (Split-Path $skill -Parent) | Out-Null
+git clone https://github.com/vincemakes/model-boss.git $skill
+New-Item -ItemType Directory -Force $agents | Out-Null
+foreach ($role in "reviewer", "implementer", "mechanic", "scout") {
+  Copy-Item (Join-Path $skill "assets\agents\codex\$role.toml") `
+    (Join-Path $agents "model-boss-$role.toml")
+}
+```
 
-MIT
+原生 Agent TOML 只是默认配置，不是安全边界。Max Reviewer 必须由运行时确认实际子
+进程的 fingerprint 与最终生效的只读权限。详情见
+[Codex 适配器](references/adapters/codex.md)。
+
+## Kimi 与 GLM 外部路由
+
+Codex 可以调用已有 `claude-kimi*` / `claude-glm*` 命令；这不代表 Kimi 会原生
+出现在 Codex 模型选择器中。Command name is not model identity / 命令名不是模型身份。
+
+从安装后的项目目录把 wrapper 安装到明确指定的目录：
+
+```bash
+bash scripts/setup-model-providers.sh --install-path "$HOME/.local/bin"
+```
+
+只给出 `--install-path` 时，setup 只安装 wrappers；即使默认旧 credentials 文件存在，也不会检查或导入它。安装脚本不会修改 shell 启动文件；如果需要，请自行把该目录加入 `PATH`。Wrappers 本身不会让 Kimi 或 GLM 可用：还必须配置完整的直接环境或 credentials 文档，并单独安装可信 Provider 二进制。
+
+直接环境中，Kimi 精确需要 `KIMI_BASE_URL` + `KIMI_AUTH_TOKEN`；GLM 精确需要 `GLM_BASE_URL` + `GLM_AUTH_TOKEN` + `GLM_MODEL` + `GLM_SMALL_FAST_MODEL`。
+
+也可以创建严格的 version 1 JSON 文档，并在本地替换占位符：
+
+```json
+{
+  "version": 1,
+  "credentials": {
+    "GLM_AUTH_TOKEN": "<glm-auth-token>",
+    "GLM_BASE_URL": "<glm-base-url>",
+    "GLM_MODEL": "<glm-model>",
+    "GLM_SMALL_FAST_MODEL": "<glm-small-fast-model>",
+    "KIMI_AUTH_TOKEN": "<kimi-auth-token>",
+    "KIMI_BASE_URL": "<kimi-base-url>"
+  }
+}
+```
+
+POSIX 只在 `XDG_CONFIG_HOME` 是绝对路径时使用 `$XDG_CONFIG_HOME/model-boss/credentials.json`，否则使用 `$HOME/.config/model-boss/credentials.json`。选中的目录必须为 `0700`，文件必须为 `0600`；HOME 回退路径可执行：
+
+```bash
+chmod 0700 "$HOME/.config/model-boss"
+chmod 0600 "$HOME/.config/model-boss/credentials.json"
+```
+
+PowerShell 中，绝对的 `$env:XDG_CONFIG_HOME` 优先；否则运行时先读取绝对的 `$env:HOME`，只在 HOME 缺失时回退到绝对的 `$env:USERPROFILE`。文档中的 `$HOME\.config\model-boss\credentials.json` 是常见 PowerShell 写法。绝对路径的 `MODEL_BOSS_CREDENTIALS` 可覆盖自动发现。绝不要把秘密放入仓库、`.model-boss.json` 或 `config/model-boss.example.json`。
+
+精确的 wrapper 角色映射如下：
+
+| 路由角色 | Reviewer transport 基础命令 | 只有验证过 OS 沙箱才允许的写命令 |
+|---|---|---|
+| Kimi Reviewer candidate | `claude-kimi` | — |
+| Kimi implementer | — | `claude-kimi-bypass -p` |
+| GLM Reviewer candidate | `claude-glm` | — |
+| GLM implementer | — | `claude-glm-bypass -p` |
+| GLM fast scout/mechanic | `claude-glm-turbo` | `claude-glm-turbo-bypass -p` |
+
+先找到已安装的 `SKILL.md` 所在目录，并把它记为
+`<model-boss-skill-root>`。目标仓库本身不需要包含 Model Boss。
+
+密封 Max 工作流的顺序固定如下。计划与最终评审必须使用相同的有效评审身份/配置：
+Reviewer route、实际 fingerprint、身份依据来源与只读证明；同时还必须使用相同的主循环
+fingerprint。Profile 文件路径可以不同，但必须解析为这些完全相同的有效事实：
+
+```bash
+mkdir -p "$PWD/../model-boss-runs"
+python3 <model-boss-skill-root>/scripts/model-boss.py plan-review \
+  --repo "$PWD" \
+  --temp-parent "$PWD/../model-boss-runs" \
+  --task /absolute/path/to/task.json \
+  --context /absolute/path/to/plan-context.json \
+  --profile /absolute/path/to/profile.json \
+  --route <reviewer-route> \
+  --main-fingerprint <provider:model:variant>
+
+python3 <model-boss-skill-root>/scripts/model-boss.py worker --manifest <manifest> \
+  --repo "$PWD" \
+  --temp-parent "$PWD/../model-boss-runs" \
+  --route claude-kimi-bypass \
+  --task /absolute/path/to/task.json \
+  --mode max
+
+python3 <model-boss-skill-root>/scripts/model-boss.py review \
+  --profile /absolute/path/to/profile.json \
+  --route <same-reviewer-route> \
+  --main-fingerprint <same-provider:model:variant> \
+  --manifest <manifest> \
+  --context /absolute/path/to/review-context.json
+
+python3 <model-boss-skill-root>/scripts/model-boss.py integrate <manifest>
+```
+
+Max 的 plan context 精确包含 `version`、`goal`、`proposed_plan`、
+`acceptance_criteria` 和 `risks`。最终 context 必须重复已批准的 goal、plan 和验收
+标准，只额外加入最终阶段专用的 `main_loop_verdict`。task、源码、计划或 Reviewer
+任一发生变化都会阻止派发或审批。
+
+Lite 在主循环内完成计划裁决。外部 Worker 自己创建 invocation，因此拒绝
+`--manifest`：
+
+```bash
+python3 <model-boss-skill-root>/scripts/model-boss.py worker \
+  --repo "$PWD" \
+  --temp-parent "$PWD/../model-boss-runs" \
+  --route claude-kimi-bypass \
+  --task /absolute/path/to/task.json \
+  --mode lite
+
+python3 <model-boss-skill-root>/scripts/model-boss.py review --inline \
+  --main-fingerprint <provider:model:variant> \
+  --manifest <manifest> \
+  --context /absolute/path/to/review-context.json
+
+python3 <model-boss-skill-root>/scripts/model-boss.py integrate <manifest>
+```
+
+Worker 会创建一次性 worktree、重新探测沙箱、执行声明的 gates，并在不改动源仓库的
+前提下密封 delta。最终评审通过后写入 invocation-bound receipt；集成只接受 manifest，
+不接受调用者另传 approval 文件。
+
+精确 task 与 review context schema 见
+[外部 CLI 安全合同](references/adapters/external-cli.md)。不要在普通仓库里直接运行
+bypass alias；缺少 one-shot invocation manifest 时会安全拒绝。同一套 manifest 与
+命令合同可由 Claude Code 或 Codex 主循环驱动；模型与 Provider 名只是 route 数据，
+不是工作流分支。
+
+普通 wrapper 本身并非只读。Reviewer transport 会追加
+`--safe-mode --no-session-persistence --permission-mode plan --tools "" -p`，在隔离的
+证据目录中运行，只从 stdin 接收 packet，并验证目录没有变化；在精确 fingerprint
+验证前仍不能成为 Max Reviewer。
+
+Bypass wrapper 只会在一次性 worktree 与验证过的 OS 沙箱中运行，绝不直接接触用户
+仓库。当前外部写 Worker 的验证后端是 macOS 与 Linux（包括 WSL 中的 Linux）。
+Windows 原生外部写路由会返回 `sandbox_unavailable` 并拒绝启动；Claude Code/Codex
+原生 Agent 编排仍可使用。安装 wrapper 也不会让 Kimi/GLM 变成 Codex 原生模型。
+
+外部 Worker 模型只获得 `Read`、`Glob`、`Grep`、`Edit` 与 `Write` 工具。Bash 已禁用，
+Web 与 MCP 工具不可用。task 声明的 gate 命令使用直接参数数组，由 Model Boss 宿主
+在模型调用后运行，不是授予模型的 shell 权限。
+
+## 安全与失败行为
+
+- Reviewer 只收到完整的 canonical evidence packet，不收到仓库、工具或凭据。
+- 外部 Worker 只能写一次性 worktree 与本次调用的 state 目录。
+- Prompt、日志、manifest 与 review packet 都不包含凭据值，但 Provider 客户端进程
+  仍会获得连接 Endpoint 所需的凭据。应优先使用短期、窄权限 token，并限制到 route
+  所需的最小权限。工具 allowlist 与文件系统沙箱不是网络安全边界：恶意或被入侵的
+  Provider 二进制可以滥用它能读取的数据或收到的凭据，Model Boss 无法阻止它通过
+  被允许的 Provider 网络连接发送这些内容。因此只应安装并运行可信的 Provider 二进制。
+- 审批绑定三哈希；目标内容漂移即返回 `destination_changed` 并要求重新快照与审批。
+- Model Boss 不 stash、reset、覆盖用户改动，也不靠 fuzzy apply 绕过冲突。
+- 公开状态固定为 `ok`、`needs_context`、`gate_failed`、
+  `provider_unavailable`、`reviewer_unavailable`、`timeout`、`scope_violation`、
+  `transport_error`、`review_revise`、`approval_stale`、`destination_changed` 与
+  `sandbox_unavailable`。
+
+外部 CLI 细节见 [安全合同](references/adapters/external-cli.md)。
+
+## 参考基准快照
+
+现有数字来自历史 Claude/Fable/Opus 参考栈，不能预测 Sol、Kimi 或未来 Profile 的
+节省比例。`-42%/-89%` 是当时记录的最强模型输出 token 变化，`-34%/-88%` 是报告
+使用的价格加权额度代理。盲测 bug-hunt 只是一次观察，不是普遍性证明。
+
+原始数字、方法与限制完整保留在
+[BENCHMARKS.zh-CN.md](BENCHMARKS.zh-CN.md)。
+
+## Model Boss 何时让开
+
+以下情况由主循环直接处理，不开启编排：小于任务包/评审开销的改动；纯分析；尚未
+定位根因的具体错误；安全或架构核心仍需要探索；用户只问模型价格/选择；或者可执行
+规格比代码本身更长。
+
+## 从 Token Saver 迁移
+
+迁移是显式且 no-overwrite 的。正常自动发现会忽略所有旧路径与旧环境变量。`--legacy-source` 必须显式提供才会导入；默认旧文件不会导入（wrapper-only setup 只安装 wrappers）。唯一标准的旧 Provider 导入命令是：
+
+```bash
+python3 <model-boss-skill-root>/scripts/model-boss.py setup-providers --legacy-source <absolute-old-providers.env>
+```
+
+该命令只会把指定的旧 `$HOME/.claude/fable-token-saver/providers.env` 格式文件当作数据解析，绝不会当作 shell 代码。`scripts/setup-model-providers.sh` 只是这条标准命令的 wrapper。迁移绝不删除或编辑旧数据。
+
+旧 JSON credentials 绝不自动复制。手动复制前必须先检查文件和目录权限，或者让 `MODEL_BOSS_CREDENTIALS` 指向现有 JSON 的绝对路径。旧环境变量会被忽略；下列是手动迁移映射，不是兼容别名。
+
+| 旧表面 | Model Boss 表面 |
+|---|---|
+| `https://github.com/vincemakes/token-saver` | `https://github.com/vincemakes/model-boss` |
+| `.claude/skills/token-saver`, `.agents/skills/token-saver` | `.claude/skills/model-boss`, `.agents/skills/model-boss` |
+| `scripts/token-saver-route.py` | `scripts/model-boss.py` |
+| `runtime.token_saver` | `runtime.model_boss` |
+| `.token-saver.json` | `.model-boss.json` |
+| `XDG_CONFIG_HOME` 为绝对路径时的 `$XDG_CONFIG_HOME/token-saver/config.json` | `$XDG_CONFIG_HOME/model-boss/config.json` |
+| 否则的 `$HOME/.config/token-saver/config.json` | `$HOME/.config/model-boss/config.json` |
+| PowerShell 在 `XDG_CONFIG_HOME` 非绝对路径时的 `$HOME\.config\token-saver\config.json` | `$HOME\.config\model-boss\config.json` |
+| `XDG_CONFIG_HOME` 为绝对路径时的 `$XDG_CONFIG_HOME/token-saver/credentials.json` | `$XDG_CONFIG_HOME/model-boss/credentials.json` |
+| 否则的 `$HOME/.config/token-saver/credentials.json` | `$HOME/.config/model-boss/credentials.json` |
+| PowerShell 在 `XDG_CONFIG_HOME` 非绝对路径时的 `$HOME\.config\token-saver\credentials.json` | `$HOME\.config\model-boss\credentials.json` |
+| `TOKEN_SAVER_CREDENTIALS` | `MODEL_BOSS_CREDENTIALS` |
+| `TOKEN_SAVER_INVOCATION_MANIFEST` | `MODEL_BOSS_INVOCATION_MANIFEST` |
+| `TOKEN_SAVER_TRUSTED_GATE_FAILURES` | `MODEL_BOSS_TRUSTED_GATE_FAILURES` |
+| `TOKEN_SAVER_PROVIDER_API_KEY` | `MODEL_BOSS_PROVIDER_API_KEY` |
+| `token-saver-<role>.md`, `token-saver-<role>.toml` | `model-boss-<role>.md`, `model-boss-<role>.toml` |
+| `token-saver-runs` | `model-boss-runs` |
+| `config/token-saver.example.json`, `config/token-saver.schema.json` | `config/model-boss.example.json`, `config/model-boss.schema.json` |
+| `dist/token-saver.skill` | `dist/model-boss.skill` |
+
+## 许可证
+
+[MIT](LICENSE)

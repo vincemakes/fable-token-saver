@@ -1,28 +1,33 @@
-# Benchmarks
+# Model Boss benchmarks
 
 **English** | [简体中文](BENCHMARKS.zh-CN.md)
 
-All numbers from real headless `claude -p` runs, measured via the CLI's per-model usage JSON — no estimation. Every run passed both gates (`tsc --noEmit` + `vitest`) and all quality assertions; **output quality was identical across conditions**. The differences are cost, quota, and time.
+> Historical reference-stack notice: these runs measure the 2026 Claude/Fable/Opus stack. They do not predict savings for Sol, Kimi, or future model profiles. `-42%` and `-89%` are recorded strongest-model output-token changes; `-34%` and `-88%` are price-weighted strongest-model quota changes used only as a quota proxy. The blind bug-hunt is one observed probe, not general proof of capability parity.
+
+> Publication provenance: the predecessor identity was normalized to neutral labels, and its captured absolute workspace prefix was normalized to `<historical-workspace>`. Recorded tasks, gate output, outcomes, and token/cost/time measurements were not changed; the placeholder does not claim that these runs occurred under a Model Boss directory.
+
+These are predecessor measurements inherited by Model Boss; Model Boss did not run this corpus. All numbers come from real headless `claude -p` runs of that predecessor, measured via the CLI's per-model usage JSON — no estimation. Every run passed both gates (`tsc --noEmit` + `vitest`) and all quality assertions; **output quality was identical across conditions**. The differences are cost, quota, and time.
 
 ## Methodology
 
-- Each condition runs as an independent headless `claude -p` session in a fresh copy of the same fixture repo (real `pnpm` project, git-initialized).
-- With-skill prompts invoke the skill; baseline prompts forbid skills. Same task text otherwise.
+- Each task/configuration pair in the inherited four-eval corpus ran once as an independent headless `claude -p` session in a fresh copy of the same fixture repo (real `pnpm` project, git-initialized).
+- The summary's ± values report sample dispersion across four distinct tasks, not repeated-trial variance or statistical confidence.
+- Predecessor-skill prompts invoke the measured predecessor; baseline prompts forbid orchestration skills. Same task text otherwise.
 - Costs/tokens come from `--output-format json`'s per-model usage breakdown.
 - Quality graded by identical objective assertions (gates re-run, greps, diff-scope checks) in all conditions.
 - Models: Fable 5 ($10/$50 per MTok), Opus 4.8 ($5/$25), Sonnet 5 ($3/$15), Haiku 4.5 ($1/$5).
 
-## Small tasks: the skill makes things WORSE
+## Predecessor result: small tasks were WORSE
 
 Three small tasks (≤ ~150 changed lines, ≤ 5 files):
 
-| Task | Fable output (with skill) | Fable output (without) | Δ Fable | Total cost with / without | Time with / without |
+| Task | Fable output (with predecessor) | Fable output (baseline) | Δ Fable | Total cost with / baseline | Time with / baseline |
 |---|---|---|---|---|---|
 | Multi-file feature (module + tests) | 4,277 | 2,757 | **+55%** | $1.25 / $0.78 | 121s / 53s |
 | Repo-wide mechanical rename | 1,865 | 1,124 | **+66%** | $0.82 / $0.63 | 83s / 36s |
 | API error-envelope redesign + apply | 6,415 | 4,798 | **+34%** | $1.85 / $1.08 | 235s / 84s |
 
-Below the break-even point, writing the task packet and reviewing the diff costs more strongest-tier tokens than just typing the change. Quality assertions: 30/30 in both conditions — no quality gain to offset the cost. This measurement is why the delegation floor (≥ ~300 lines / ≥ 6 files / repetitive many-site edits) is baked into the skill.
+Below the break-even point, writing the task packet and reviewing the diff costs more strongest-tier tokens than just typing the change. Quality assertions: 30/30 in both conditions — no quality gain to offset the cost. This measurement is why the delegation floor (≥ ~300 lines / ≥ 6 files / repetitive many-site edits) is baked into Model Boss.
 
 ## Large task: the full four-way comparison
 
@@ -66,7 +71,7 @@ Setup: a metering/billing module with **6 planted production-grade bugs** (half-
 Two conclusions, one per direction:
 
 - **Capability parity is real.** The max configuration found and correctly fixed every planted bug, including the race condition and the aliasing bug — root-cause reasoning survives the consultant architecture intact.
-- **The economics invert on judgment-dense work.** In a debugging task, the *reasoning is the workload* — there is no cheap implementation volume to delegate. The consultant ended up doing more strongest-tier reasoning ($1.76) than solo Fable spent on the entire job ($1.58), with Opus and Sonnet billed on top. Orchestration here is pure bureaucracy: same quality, 2.2× the cost, 3.9× the time. This is measured confirmation of the skill's built-in rules — "do not trigger for debugging" and "design-heavy work stays with the orchestrator" were design intuitions; now they're data.
+- **The economics invert on judgment-dense work.** In a debugging task, the *reasoning is the workload* — there is no cheap implementation volume to delegate. The consultant ended up doing more strongest-tier reasoning ($1.76) than solo Fable spent on the entire job ($1.58), with Opus and Sonnet billed on top. Orchestration here is pure bureaucracy: same quality, 2.2× the cost, 3.9× the time. This is measured confirmation of Model Boss's built-in rules — "do not trigger for debugging" and "design-heavy work stays with the orchestrator" were design intuitions; now they're data.
 
 (Caveat: n=1 task, single run per configuration — a capability probe, not a statistical claim.)
 
@@ -80,9 +85,9 @@ Two conclusions, one per direction:
 
 Two different wallets:
 
-- **Pay-per-token API users** — total dollars is your metric, and the savings are marginal at best (lite: −5%). The dollar gap widens with task size because the orchestrator's packet+review overhead is roughly fixed while delegated volume grows. Only reach for the skill on genuinely large tasks.
+- **Pay-per-token API users** — total dollars is your metric, and the savings are marginal at best (lite: −5%). The dollar gap widens with task size because the orchestrator's packet+review overhead is roughly fixed while delegated volume grows. Only reach for Model Boss on genuinely large tasks.
 - **Subscription users (Claude Max and similar)** — your real constraint is the strongest model's **rate-limit quota**. Cheaper tiers burn quota far slower, and the quota window resets regardless of spend. **−88% strongest-tier quota means roughly 8× more orchestrated work per quota window.** This is the skill's primary audience: a quota-arbitrage tool first, a cost tool second.
 
 ## Reproduce
 
-The eval prompts are in [evals/evals.json](evals/evals.json); raw benchmark data in [benchmarks/](benchmarks/). Each eval runs twice (with/without skill) as headless `claude -p` sessions — see Methodology above.
+The eval prompts are in [evals/evals.json](evals/evals.json); raw benchmark data is in [benchmarks/](benchmarks/). The four recorded benchmark evals each contain one predecessor-skill observation and one baseline observation; they were not rerun for Model Boss — see Methodology above.
